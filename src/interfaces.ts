@@ -70,6 +70,9 @@ export interface Task extends SelectableDataPoint {
     resource: string | null;
     end: Date | null;
     parent: string | null;
+    parentPath?: string | null;
+    path?: string;
+    level?: number;
     children: Task[] | null;
     visibility: boolean;
     taskType: string | null;
@@ -93,6 +96,8 @@ export interface Layer {
 export interface GroupedTask {
     index: number;
     name: string;
+    path?: string;
+    level?: number;
     tasks: Task[];
     layers: Map<number, Task[]>;
 }

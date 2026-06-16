@@ -46,7 +46,6 @@ import lodashMinBy from "lodash.minby";
 import lodashMax from "lodash.max";
 import lodashMaxBy from "lodash.maxby";
 import lodashGroupBy from "lodash.groupby";
-import lodashUniqBy from "lodash.uniqby";
 import { Dictionary as lodashDictionary } from "lodash";
 
 import powerbi from "powerbi-visuals-api";
@@ -1027,7 +1026,6 @@ export class Gantt implements IVisual {
         const categoricalValues: DataViewValueColumns = dataView?.categorical?.values ?? ([] as unknown as DataViewValueColumns);
 
         let tasks: Task[] = [];
-        const addedParents: string[] = [];
         taskColor = taskColor || Gantt.DefaultValues.TaskColor;
 
         const values: GanttColumns<any> = GanttColumns.getCategoricalValues(dataView)!;
@@ -1039,7 +1037,7 @@ export class Gantt implements IVisual {
         const colorHelper: ColorHelper = new ColorHelper(this.colors, LegendPropertyIdentifier);
         const groupValues: GanttColumns<DataViewValueColumn>[] = GanttColumns.getGroupedValueColumns(dataView) || [];
 
-        const collapsedTasks: string[] = JSON.parse(this.formattingSettings.collapsedTasks.list.value);
+        const collapsedTasks: string[] = this.normalizeCollapseValues(JSON.parse(this.formattingSettings.collapsedTasks.list.value));
         let durationUnit: DurationUnit = <DurationUnit>this.formattingSettings.general.durationUnit.value.value.toString();
         let duration: number = this.formattingSettings.general.durationMin.value;
 
@@ -1088,7 +1086,6 @@ export class Gantt implements IVisual {
                     task,
                     tasks,
                     taskParentName,
-                    addedParents,
                     collapsedTasks,
                     extraInformation,
                     selectionBuilder,
@@ -1100,9 +1097,8 @@ export class Gantt implements IVisual {
 
         Gantt.downgradeDurationUnitIfNeeded(tasks, durationUnit);
 
-        if (values.Parent) {
-            tasks = Gantt.sortHierarchicalTasks(tasks, sortingOptions);
-        }
+        tasks = Gantt.mergeSyntheticAndExplicitHierarchyTasks(tasks);
+        tasks = Gantt.sortHierarchicalTasks(tasks, sortingOptions);
 
         this.updateTaskDetails(tasks, durationUnit, duration, dataView, collapsedTasks);
         if (formatters) {
@@ -1155,15 +1151,15 @@ export class Gantt implements IVisual {
                 } while (task.daysOffList.length && datesDiff - DaysInAWeekend >= DaysInAWeek);
             }
 
-            if (task.parent) {
-                task.visibility = collapsedTasks.indexOf(task.parent) === -1;
+            if (task.parent || task.parentPath) {
+                task.visibility = !this.isTaskCollapsedByHierarchy(task, collapsedTasks);
             }
         });
     }
 
     private addTooltipInfoForCollapsedTasks(tasks: Task[], collapsedTasks: string[], formatters: GanttChartFormatters, durationUnit: DurationUnit, isEndDateFilled: boolean) {
         tasks.forEach((task: Task) => {
-            if (!task.children || collapsedTasks.includes(task.name)) {
+            if (!task.children || this.isCollapsedValue(collapsedTasks, task.path, task.name)) {
                 task.tooltipInfo = Gantt.getTooltipInfo({
                     task,
                     formatters,
@@ -1391,27 +1387,73 @@ export class Gantt implements IVisual {
         task: Task,
         tasks: Task[],
         taskParentName: string,
-        addedParents: string[],
         collapsedTasks: string[],
         extraInformation: ExtraInformation[],
         selectionBuilder: ISelectionIdBuilder,
     ) {
-        if (addedParents.includes(taskParentName)) {
-            const parentTask = tasks.find(x => x.index === 0 && x.name === taskParentName);
-            if (parentTask && parentTask.children) {
-                parentTask.children.push(task);
-            }
+        let parentTask = tasks.find(x => x.name === taskParentName);
+
+        if (!parentTask) {
+            parentTask = Gantt.createParentTask(
+                taskParentName,
+                task,
+                collapsedTasks.includes(taskParentName) ? extraInformation : null,
+                selectionBuilder,
+            );
+            tasks.push(parentTask);
             return;
         }
 
-        addedParents.push(taskParentName);
-        const parentTask = Gantt.createParentTask(
-            taskParentName,
-            task,
-            collapsedTasks.includes(taskParentName) ? extraInformation : null,
-            selectionBuilder,
-        );
-        tasks.push(parentTask);
+        if (!parentTask.children) {
+            parentTask.children = [];
+        }
+
+        parentTask.children.push(task);
+    }
+
+    private static isSyntheticParentTask(task: Task): boolean {
+        return !!task.children?.length &&
+            task.start == null &&
+            task.end == null &&
+            task.duration == null &&
+            task.taskType == null;
+    }
+
+    private static mergeSyntheticAndExplicitHierarchyTasks(tasks: Task[]): Task[] {
+        const explicitTasksByName = new Map<string, Task>();
+
+        tasks.forEach((task: Task) => {
+            if (!Gantt.isSyntheticParentTask(task)) {
+                explicitTasksByName.set(task.name, task);
+            }
+        });
+
+        tasks.forEach((task: Task) => {
+            if (!Gantt.isSyntheticParentTask(task)) {
+                return;
+            }
+
+            const explicitTask = explicitTasksByName.get(task.name);
+            if (!explicitTask || explicitTask === task) {
+                return;
+            }
+
+            if (task.children?.length) {
+                explicitTask.children = task.children;
+            }
+
+            if (!task.parent && explicitTask.parent) {
+                task.parent = explicitTask.parent;
+            }
+        });
+
+        return tasks.filter((task: Task) => {
+            if (!Gantt.isSyntheticParentTask(task)) {
+                return true;
+            }
+
+            return !explicitTasksByName.has(task.name);
+        });
     }
 
     /**
@@ -1549,31 +1591,46 @@ export class Gantt implements IVisual {
             return nameA.localeCompare(nameB, undefined, { numeric: true }) * sortingDirection;
         });
 
+        const rootTasks = tasks.filter((task: Task) => !task.parent);
+
         if (sortingOptions.isCustomSortingNeeded) {
-            tasks.sort(sortingFunction);
+            rootTasks.sort(sortingFunction);
         }
 
         let index: number = 0;
-        tasks.forEach(task => {
-            if (!task.parent) {
-                task.index = index++;
-
-                if (task.children) {
-                    if (sortingOptions.isCustomSortingNeeded) {
-                        task.children.sort(sortingFunction);
-                    }
-
-                    task.children.forEach(subtask => {
-                        subtask.index = index++;
-                    });
-                }
-            }
-        });
-
         const resultTasks: Task[] = [];
 
-        tasks.forEach((task) => {
-            resultTasks[task.index] = task;
+        const assignHierarchy = (task: Task, parentPath: string | null, level: number) => {
+            task.index = index++;
+            task.parentPath = parentPath;
+            task.path = parentPath ? `${parentPath}.${task.name}` : task.name;
+            task.level = level;
+            resultTasks.push(task);
+
+            if (!task.children?.length) {
+                return;
+            }
+
+            if (sortingOptions.isCustomSortingNeeded) {
+                task.children.sort(sortingFunction);
+            }
+
+            task.children.forEach((subtask: Task) => {
+                assignHierarchy(subtask, task.path || null, level + 1);
+            });
+        };
+
+        rootTasks.forEach((task: Task) => {
+            assignHierarchy(task, null, 0);
+        });
+
+        // Keep orphan tasks visible even if their parent is missing in the model.
+        tasks.forEach((task: Task) => {
+            if (resultTasks.includes(task)) {
+                return;
+            }
+
+            assignHierarchy(task, null, 0);
         });
 
         return resultTasks;
@@ -2004,7 +2061,7 @@ export class Gantt implements IVisual {
             return;
         }
 
-        this.collapsedTasks = JSON.parse(settings.collapsedTasks.list.value);
+        this.collapsedTasks = this.normalizeCollapseValues(JSON.parse(settings.collapsedTasks.list.value));
         const groupTasks = settings.general.groupTasks.value;
         const layerOverlappingTasks = settings.general.overlappingTasksGroup;
         const groupedTasks: GroupedTask[] = this.getGroupTasks(tasks, groupTasks, this.collapsedTasks, layerOverlappingTasks);
@@ -2233,7 +2290,7 @@ export class Gantt implements IVisual {
     private getGroupTasks(tasks: Task[], groupTasks: boolean, collapsedTasks: string[], overlappingSettings: OverlappingTasks): GroupedTask[] {
         if (groupTasks) {
             const groupedTasks: lodashDictionary<Task[]> = lodashGroupBy(tasks,
-                x => (x.parent ? `${x.parent}.${x.name}` : x.name));
+                x => x.path || (x.parent ? `${x.parent}.${x.name}` : x.name));
 
             const result: GroupedTask[] = [];
             const taskKeys: string[] = Object.keys(groupedTasks);
@@ -2248,52 +2305,52 @@ export class Gantt implements IVisual {
 
             Gantt.sortTasksForLayering(groupedTasks, this.sortingOptions.isCustomSortingNeeded);
 
-            for (const key of taskKeys) {
+            const appendTaskGroup = (task: Task): void => {
+                const key = task.path || (task.parent ? `${task.parent}.${task.name}` : task.name);
                 const isKeyAlreadyReviewed = alreadyReviewedKeys.includes(key);
-                if (isKeyAlreadyReviewed) continue;
+                if (!key || isKeyAlreadyReviewed || !groupedTasks[key]?.length) {
+                    return;
+                }
 
-                // Skip child task keys — they are added through the inner children loop
-                // to guarantee parent-first order regardless of sorting direction.
-                // Note: children of collapsed parents are already filtered out by visibility
-                // before getGroupTasks is called, so they won't be lost here.
-                if (groupedTasks[key]?.[0]?.parent) continue;
-
-                const name: string = key;
-
-                // add current task
+                const currentGroup = groupedTasks[key];
+                const firstTask = currentGroup[0];
                 const taskRecord: GroupedTask = {
-                    name,
-                    tasks: groupedTasks[key],
+                    name: firstTask.name,
+                    path: key,
+                    level: firstTask.level || 0,
+                    tasks: currentGroup,
                     index: 0,
                     layers: new Map<number, Task[]>()
                 };
+
                 result.push(taskRecord);
                 alreadyReviewedKeys.push(key);
 
-                // Add children in the order defined by task.children
-                // (set by sortHierarchicalTasks or sortTasksForLayering)
-                for (const task of groupedTasks[key]) {
-                    if (task.children && !collapsedTasks.includes(task.name)) {
-                        for (const childrenTask of task.children) {
-                            const childrenFullName = `${name}.${childrenTask.name}`;
-                            const isChildrenKeyAlreadyReviewed = alreadyReviewedKeys.includes(childrenFullName);
-
-                            if (!isChildrenKeyAlreadyReviewed) {
-                                const childrenRecord: GroupedTask = {
-                                    name: childrenTask.name,
-                                    tasks: groupedTasks[childrenFullName],
-                                    index: 0,
-                                    layers: new Map<number, Task[]>()
-                                };
-                                result.push(childrenRecord);
-                                alreadyReviewedKeys.push(childrenFullName);
-                            }
-
-                        }
-                    }
-
+                if (this.isCollapsedValue(collapsedTasks, firstTask.path, firstTask.name)) {
+                    return;
                 }
-            }
+
+                if (!firstTask.children?.length) {
+                    return;
+                }
+
+                firstTask.children.forEach((childrenTask: Task) => appendTaskGroup(childrenTask));
+            };
+
+            const rootTasks: Task[] = tasks.filter((task: Task) => !task.parentPath && !task.parent);
+            rootTasks.forEach((task: Task) => appendTaskGroup(task));
+
+            // Fallback for broken hierarchy inputs: include rows not reachable from roots.
+            taskKeys.forEach((key: string) => {
+                if (alreadyReviewedKeys.includes(key)) {
+                    return;
+                }
+
+                const fallbackTask = groupedTasks[key]?.[0];
+                if (fallbackTask) {
+                    appendTaskGroup(fallbackTask);
+                }
+            });
 
             result.forEach((x, i) => {
                 x.tasks.forEach(t => t.index = i);
@@ -2328,6 +2385,8 @@ export class Gantt implements IVisual {
 
         return tasks.map(x => ({
             name: x.name,
+            path: x.path,
+            level: x.level || 0,
             index: x.index,
             tasks: [x],
             layers: new Map<number, Task[]>()
@@ -2561,28 +2620,11 @@ export class Gantt implements IVisual {
 
         this.renderClickableAreas(axisLabelGroup, width, taskConfigHeight);
 
-        let parentTask: string = "";
-        let childrenCount = 0;
-        let currentChildrenIndex = 0;
-
         axisLabelGroup
             .append("rect")
-            .attr("x", (task: GroupedTask) => {
-                const isGrouped = this.formattingSettings.general.groupTasks.value;
-                const drawStandardMargin: boolean = !task.tasks[0].parent || (!!task.tasks[0].parent && task.tasks[0].parent !== parentTask);
-                parentTask = task.tasks[0].parent ? task.tasks[0].parent : task.tasks[0].name;
-                if (task.tasks[0].children) {
-                    parentTask = task.tasks[0].name;
-                    childrenCount = isGrouped ? lodashUniqBy(task.tasks[0].children, "name").length : task.tasks[0].children.length;
-                    currentChildrenIndex = 0;
-                }
-
-                if (task.tasks[0].parent === parentTask) {
-                    currentChildrenIndex++;
-                }
-                const isLastChild = childrenCount && childrenCount === currentChildrenIndex;
-                return drawStandardMargin || isLastChild ? Gantt.DefaultValues.ParentTaskLeftMargin : Gantt.DefaultValues.ChildTaskLeftMargin;
-            })
+            .attr("x", (task: GroupedTask) => (task.level || 0) > 0
+                ? Gantt.DefaultValues.ChildTaskLeftMargin
+                : Gantt.DefaultValues.ParentTaskLeftMargin)
             .attr("y", (task: GroupedTask) => {
                 const groupHeight = ((task.layers.size || 1) - 1) * taskConfigHeight;
                 const res = (task.index + 1) * this.getResourceLabelTopMargin() + (taskConfigHeight - this.formattingSettings.taskLabels.taskLabelsGroup.general.fontSize.value) / 2 + groupHeight;
@@ -2684,14 +2726,18 @@ export class Gantt implements IVisual {
 
         clickableArea
             .append("text")
-            .attr("x", (task: GroupedTask) => (Gantt.TaskLineCoordinateX +
-                (task.tasks.every((task: Task) => !!task.parent)
-                    ? Gantt.SubtasksLeftMargin
-                    : (task.tasks[0].children && !!task.tasks[0].children.length) ? this.parentLabelOffset : 0)))
-            .attr("class", (task: GroupedTask) => task.tasks[0].children ? "parent" : task.tasks[0].parent ? "child" : "normal-node")
+            .attr("x", (task: GroupedTask) => {
+                const levelOffset = (task.level || 0) * Gantt.SubtasksLeftMargin;
+                const hasChildren = !!(task.tasks[0].children && task.tasks[0].children.length);
+                return Gantt.TaskLineCoordinateX + levelOffset + (hasChildren ? this.parentLabelOffset : 0);
+            })
+            .attr("class", (task: GroupedTask) => {
+                const hasChildren = !!(task.tasks[0].children && task.tasks[0].children.length);
+                return hasChildren ? "parent" : (task.level || 0) > 0 ? "child" : "normal-node";
+            })
             .style("font-weight", (task: GroupedTask) => {
                 const isParent = !!task.tasks[0].children;
-                const isChild = !!task.tasks[0].parent;
+                const isChild = (task.level || 0) > 0;
 
                 if (isParent) {
                     return general.bold.value ? "900" : "700";
@@ -2704,20 +2750,20 @@ export class Gantt implements IVisual {
                 return general.bold.value ? "700" : "400";
             })
             .style("font-size", (task: GroupedTask) => {
-                const isChild: boolean = !!task.tasks[0].parent;
+                const isChild: boolean = (task.level || 0) > 0;
                 return PixelConverter.fromPoint(isChild && useCustom
                     ? nestedLabels.fontSize.value
                     : general.fontSize.value
                 )
             })
             .style("font-family", (task: GroupedTask) => {
-                const isChild: boolean = !!task.tasks[0].parent;
+                const isChild: boolean = (task.level || 0) > 0;
                 return isChild && useCustom
                     ? nestedLabels.fontFamily.value
                     : general.fontFamily.value;
             })
             .style("font-style", (task: GroupedTask) => {
-                const isChild: boolean = !!task.tasks[0].parent;
+                const isChild: boolean = (task.level || 0) > 0;
 
                 if (isChild) {
                     return useCustom
@@ -2727,7 +2773,7 @@ export class Gantt implements IVisual {
                 return general.italic.value ? "italic" : "normal";
             })
             .style("text-decoration", (task: GroupedTask) => {
-                const isChild: boolean = !!task.tasks[0].parent;
+                const isChild: boolean = (task.level || 0) > 0;
                 return isChild && useCustom
                     ? nestedLabels.underline.value ? "underline" : "none"
                     : general.underline.value ? "underline" : "none";
@@ -2738,7 +2784,7 @@ export class Gantt implements IVisual {
                 return (task.index + (task.layers.size || 0) + 0.5) * this.getResourceLabelTopMargin() + groupHeight / 2;
             })
             .attr("fill", (task: GroupedTask) => {
-                const isChild: boolean = !!task.tasks[0].parent;
+                const isChild: boolean = (task.level || 0) > 0;
 
                 return isChild && useCustom
                     ? this.colorHelper.getHighContrastColor("foreground", nestedLabels.fill.value.value)
@@ -2917,31 +2963,66 @@ export class Gantt implements IVisual {
         }
     }
 
+    private normalizeCollapseValues(collapsedValues: string[]): string[] {
+        const normalized: string[] = [];
+
+        collapsedValues.forEach((value) => {
+            if (!value || normalized.includes(value)) {
+                return;
+            }
+
+            normalized.push(value);
+        });
+
+        return normalized;
+    }
+
+    private isCollapsedValue(collapsedValues: string[], path?: string | null, name?: string | null): boolean {
+        if (path && collapsedValues.includes(path)) {
+            return true;
+        }
+
+        return !!name && collapsedValues.includes(name);
+    }
+
+    private isTaskCollapsedByHierarchy(task: Task, collapsedValues: string[]): boolean {
+        let ancestorPath = task.parentPath;
+
+        while (ancestorPath) {
+            const ancestorName = ancestorPath.split(".").pop();
+            if (this.isCollapsedValue(collapsedValues, ancestorPath, ancestorName)) {
+                return true;
+            }
+
+            const splitIndex = ancestorPath.lastIndexOf(".");
+            ancestorPath = splitIndex === -1 ? null : ancestorPath.substring(0, splitIndex);
+        }
+
+        return false;
+    }
+
     /**
      * callback for subtasks click event
      * @param taskClicked Grouped clicked task
      */
     private subTasksCollapseCb(taskClicked: GroupedTask): void {
-        const taskIsChild: boolean = !!taskClicked.tasks[0].parent && !taskClicked.tasks[0].children;
-        const taskWithoutParentAndChildren: boolean = !taskClicked.tasks[0].parent && !taskClicked.tasks[0].children;
-        if (taskIsChild || taskWithoutParentAndChildren) {
+        const currentTask = taskClicked.tasks[0];
+        const hasChildren = !!currentTask.children?.length;
+        if (!hasChildren) {
             return;
         }
 
-        const taskClickedParent: string = taskClicked.tasks[0].parent || taskClicked.tasks[0].name;
-        this.viewModel.tasks.forEach((task: Task) => {
-            if (task.parent === taskClickedParent &&
-                task.parent.length >= taskClickedParent.length) {
-                const index: number = this.collapsedTasks.indexOf(task.parent);
-                if (task.visibility) {
-                    this.collapsedTasks.push(task.parent);
-                } else {
-                    if (taskClickedParent === task.parent) {
-                        this.collapsedTasks.splice(index, 1);
-                    }
-                }
-            }
-        });
+        const taskPath = currentTask.path || taskClicked.path || currentTask.name;
+        const taskName = currentTask.name;
+        const isCollapsed = this.isCollapsedValue(this.collapsedTasks, taskPath, taskName);
+
+        if (isCollapsed) {
+            this.collapsedTasks = this.collapsedTasks.filter((value: string) => value !== taskPath && value !== taskName);
+        } else {
+            this.collapsedTasks.push(taskPath);
+        }
+
+        this.collapsedTasks = this.normalizeCollapseValues(this.collapsedTasks);
 
         const newId = crypto.randomUUID();
         this.collapsedTasksUpdateIDs.push(newId);
@@ -2966,13 +3047,11 @@ export class Gantt implements IVisual {
         } else {
             collapsedAllSelector.attr(this.collapseAllFlag, "1");
             drawExpandButton(collapsedAllSelector, buttonExpandCollapseColor);
-            this.viewModel.tasks.forEach((task: Task) => {
-                if (task.parent) {
-                    if (task.visibility) {
-                        this.collapsedTasks.push(task.parent);
-                    }
-                }
-            });
+            this.collapsedTasks = this.normalizeCollapseValues(
+                this.viewModel.tasks
+                    .filter((task: Task) => !!task.children?.length)
+                    .map((task: Task) => task.path || task.name)
+            );
         }
 
         const newId = crypto.randomUUID();
@@ -3054,8 +3133,8 @@ export class Gantt implements IVisual {
     private updateCommonTasks(groupedTasks: GroupedTask[]): void {
         if (!this.formattingSettings.general.groupTasks.value) {
             groupedTasks.forEach((groupedTask: GroupedTask) => {
-                const currentTaskName: string = groupedTask.name;
-                if (this.collapsedTasks.includes(currentTaskName)) {
+                const currentTask = groupedTask.tasks[0];
+                if (this.isCollapsedValue(this.collapsedTasks, currentTask.path, groupedTask.name)) {
                     const firstTask: Task = groupedTask.tasks && groupedTask.tasks[0];
                     const tasks = groupedTask.tasks;
                     tasks.forEach((task: Task) => {
@@ -3083,8 +3162,8 @@ export class Gantt implements IVisual {
      */
     private updateCommonMilestones(groupedTasks: GroupedTask[]): void {
         groupedTasks.forEach((groupedTask: GroupedTask) => {
-            const currentTaskName: string = groupedTask.name;
-            if (this.collapsedTasks.includes(currentTaskName)) {
+            const currentTask = groupedTask.tasks[0];
+            if (this.isCollapsedValue(this.collapsedTasks, currentTask.path, groupedTask.name)) {
 
                 const lastTask: Task = groupedTask.tasks && groupedTask.tasks[groupedTask.tasks.length - 1];
                 const tasks = groupedTask.tasks;
@@ -3159,7 +3238,7 @@ export class Gantt implements IVisual {
      * @param task
      */
     private getTaskRectWidth(task: Task): number {
-        const taskIsCollapsed = this.collapsedTasks.includes(task.name);
+        const taskIsCollapsed = this.isCollapsedValue(this.collapsedTasks, task.path, task.name);
 
         if (this.hasNotNullableDates &&
             (taskIsCollapsed || lodashIsEmpty(task.Milestones)) &&

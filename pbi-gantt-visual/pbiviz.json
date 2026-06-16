@@ -1,0 +1,25 @@
+{
+  "visual": {
+    "name": "ganttCustomVisual",
+    "displayName": "Custom Gantt Chart",
+    "guid": "ganttCustomVisualA9B2D3F1E6C74",
+    "visualClassName": "Visual",
+    "version": "1.0.0.0",
+    "description": "A custom Gantt chart visual with planned vs actual timelines.",
+    "supportUrl": "https://example.com/support",
+    "gitHubUrl": "https://example.com/repo"
+  },
+  "apiVersion": "5.6.0",
+  "author": {
+    "name": "Your Team",
+    "email": "your-team@example.com"
+  },
+  "assets": {
+    "icon": "assets/icon.svg"
+  },
+  "style": "style/visual.less",
+  "capabilities": "capabilities.json",
+  "externalJS": [],
+  "dependencies": null,
+  "stringResources": []
+}

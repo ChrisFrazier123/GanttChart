@@ -1,0 +1,168 @@
+/*
+ *  Power BI Visualizations
+ *
+ *  Copyright (c) Microsoft Corporation
+ *  All rights reserved.
+ *  MIT License
+ *
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the ""Software""), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *
+ *  The above copyright notice and this permission notice shall be included in
+ *  all copies or substantial portions of the Software.
+ *
+ *  THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ *  THE SOFTWARE.
+ */
+
+@focus-color: rgb(94, 158, 214);
+
+@keyframes pulse {
+    0% {
+        stroke-width: 0px;
+    }
+    50% {
+        stroke-width: 2px;
+    }
+    100% {
+        stroke-width: 0px;
+    }
+}
+
+.visual {
+    .gantt-body {
+        overflow: auto;
+        position: absolute;
+    }
+
+    .gantt {
+        position: absolute;
+
+        .axis {
+
+            path,
+            line {
+                stroke: #000;
+            }
+
+            path {
+                fill: none;
+                stroke-width: 1.5;
+            }
+
+            line {
+                stroke-width: 1;
+            }
+        }
+
+        .tasks {
+            .task {
+                .task-resource {
+                    font-size: medium;
+                    font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+                    letter-spacing: .22px;
+                }
+
+                .task-progress {
+                    opacity: 1;
+                }
+
+                .task-pseudo-gradient {
+                    opacity: .4;
+                    fill: white !important;
+                }
+
+                .task-rect, .task-milestone > path {
+                    & {
+                        stroke-width: 0;
+                        cursor: pointer;
+                    }
+
+                    &:focus, &:focus-visible {
+                        outline: none;
+                    }
+
+                    &:focus-visible {
+                        animation: pulse 1s infinite;
+                    }
+                }
+            }
+        }
+
+        .chart-line {
+            stroke-width: 2px;
+            stroke: #000;
+        }
+
+        .task-labels {
+            width: 110px;
+        }
+
+        .task-lines {
+            .label {
+                font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-weight: 400;
+                letter-spacing: .22px;
+
+                .parent {
+                    font-weight: 700;
+                }
+
+                .child {
+                    font-style: oblique
+                }
+            }
+
+            g.clickableArea.pointerCursor,
+            g.collapse-all
+            {
+                cursor: pointer;
+            }
+        }
+    }
+
+    .clearCatcher {
+        fill-opacity: 0;
+    }
+
+    .data-labels {
+        font-size: 12px;
+        text-anchor: middle;
+        font-family: helvetica, arial, sans-serif;
+        pointer-events: none;
+    }
+
+    .legend .navArrow {
+        fill: #333333;
+        cursor: pointer;
+        /* stroke enabled for a bigger click target, but smaller visible arrow size */
+        stroke: #FFF;
+        stroke-width: 2px;
+    }
+
+    g.legendItem {
+        cursor: pointer;
+    }
+
+    g.collapse-all {
+        cursor: pointer;
+    }
+
+    .collapse-all-arrow:focus-visible {
+        outline: @focus-color solid 2px;
+        outline-offset: -12px;
+    }
+}
+
+body.visual-sandbox {
+    cursor: default;
+}

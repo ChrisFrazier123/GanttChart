@@ -1,0 +1,3517 @@
+/*
+ *  Power BI Visualizations
+ *
+ *  Copyright (c) Microsoft Corporation
+ *  All rights reserved.
+ *  MIT License
+ *
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the ""Software""), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *
+ *  The above copyright notice and this permission notice shall be included in
+ *  all copies or substantial portions of the Software.
+ *
+ *  THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ *  THE SOFTWARE.
+ */
+
+import powerbi from "powerbi-visuals-api";
+import { select as d3Select, selectAll as d3SelectAll, Selection as d3Selection } from 'd3-selection';
+import { timeDay as d3TimeDay } from "d3-time";
+
+import lodashMinBy from "lodash.minby";
+import lodashMaxBy from "lodash.maxby";
+import lodashUniq from "lodash.uniq";
+import lodashUniqBy from "lodash.uniqby";
+
+import { VisualData } from "./visualData";
+import { VisualBuilder } from "./visualBuilder";
+import { getEndDate, isColorAppliedToElements } from "./helpers/helpers";
+import {
+    assertColorsMatch,
+    clickElement,
+    createVisualHost,
+    getRandomNumber,
+    MockISelectionId,
+    MockISelectionIdBuilder,
+    parseColorString
+} from "powerbi-visuals-utils-testutils";
+
+import { pixelConverter as PixelConverter } from "powerbi-visuals-utils-typeutils";
+import { legendPosition as LegendPosition } from "powerbi-visuals-utils-chartutils";
+import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
+
+import { DayOffData, Milestone, Task, TaskDaysOff } from "../src/interfaces";
+import { DurationHelper } from "../src/durationHelper";
+import { Gantt, Gantt as VisualClass } from "../src/gantt";
+import { getRandomHexColor, isValidDate } from "../src/utils";
+
+import { DefaultOpacity, DimmedOpacity } from "../src/behavior";
+import { DateType, Day, DurationUnit, MilestoneShape, ResourceLabelPosition } from "../src/enums";
+import DataView = powerbi.DataView;
+import PrimitiveValue = powerbi.PrimitiveValue;
+
+interface TransformDurationStatic {
+    transformDuration(duration: number, unit: DurationUnit, precision: number): number;
+}
+
+import IVisualHost = powerbi.extensibility.visual.IVisualHost;
+import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
+import IValueFormatter = valueFormatter.IValueFormatter;
+import SortDirection = powerbi.SortDirection;
+import { darken, rgbString } from "powerbi-visuals-utils-colorutils";
+
+const defaultTaskDuration: number = 1;
+const datesAmountForScroll: number = 90;
+const millisecondsInADay: number = 24 * 60 * 60 * 1000;
+
+describe("Gantt", () => {
+    let visualBuilder: VisualBuilder;
+    let defaultDataViewBuilder: VisualData;
+    let dataView: DataView;
+
+    beforeEach(() => {
+        visualBuilder = new VisualBuilder(1000, 500);
+
+        defaultDataViewBuilder = new VisualData();
+        dataView = defaultDataViewBuilder.getDataView();
+        fixDataViewDateValuesAggregation(dataView);
+
+    });
+
+    function fixDataViewDateValuesAggregation(dataView: DataView) {
+        const categoricalValues = dataView.categorical?.values;
+        if (!categoricalValues || categoricalValues.length === 0) {
+            return;
+        }
+
+        for (const column of categoricalValues) {
+            if (!column.source.type?.dateTime) {
+                continue;
+            }
+
+            const values = column.values;
+            for (let i = 0; i < values.length; ++i) {
+                let stringValue: string = values[i].toString();
+                let index: number = stringValue.indexOf(")");
+
+                if (stringValue.length - 1 !== index) {
+                    values[i] = new Date(stringValue.substring(0, index + 1));
+                }
+            }
+        }
+    }
+
+    function getUniqueParentsCount(dataView: DataView, parentColumnIndex: number) {
+        let uniqueParents: string[] = [];
+
+        dataView?.table?.rows?.forEach(row => {
+            if (row[parentColumnIndex] && uniqueParents.indexOf(row[parentColumnIndex] as string)) {
+                uniqueParents.push(row[parentColumnIndex] as string);
+            }
+        });
+
+        return uniqueParents.length;
+    }
+
+    describe("DOM tests", () => {
+
+        // function that uses grep to filter
+        function grep(val: SVGElement[]) {
+            return val.filter((e: SVGElement) => e.innerHTML === "" || e.textContent === "");
+        }
+
+        it("svg element created", () => {
+            expect(visualBuilder.mainElement).not.toBeNull();
+        });
+
+        it("update", (done) => {
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const taskResources = visualBuilder.taskResources;
+                const countOfTaskLabels = taskResources.length;
+
+                const countOfTaskLines = visualBuilder.taskLabels.length;
+                const countOfTasks = visualBuilder.tasks.length;
+
+                const uniqueParents = getUniqueParentsCount(dataView, 5);
+
+                expect(countOfTaskLabels).toEqual((dataView.table?.rows?.length ?? 0) + uniqueParents);
+                expect(countOfTaskLines).toEqual((dataView.table?.rows?.length ?? 0) + uniqueParents);
+                expect(countOfTasks).toEqual((dataView.table?.rows?.length ?? 0) + uniqueParents);
+
+                done();
+            });
+        });
+
+        it("Task Elements are presented in DOM if and only if task name is available (specified)", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnTask]);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                expect(visualBuilder.tasks.length).not.toEqual(0);
+                done();
+            });
+        });
+
+        it("When Task Element is Missing, empty viewport should be created", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnCompletePercentage]);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let body = d3Select(visualBuilder.element);
+
+                expect(body.select(".axis").selectAll("*").nodes().length).toEqual(1);
+                expect(body.select(".task-lines").selectAll("task-labels").nodes().length).toEqual(0);
+                expect(body.select(".chart .tasks").selectAll("*").nodes().length).toEqual(0);
+                done();
+            });
+        });
+
+        it("When task duration is missing,  it should be set to 1", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnResource,
+                VisualData.ColumnCompletePercentage]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+
+                for (let task of tasks) {
+                    expect(task.duration).toEqual(defaultTaskDuration);
+                }
+
+                done();
+            });
+        });
+
+        it("When task duration is 1 or less,  it should be set to 1, not false", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnDuration,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnResource,
+                VisualData.ColumnCompletePercentage]);
+
+            dataView
+                .categorical
+                ?.values
+                ?.filter(x => x.source.roles?.Duration)
+                .forEach((element) => {
+                    element.values = element.values.map((v: PrimitiveValue, i) => i === 0 ? 1 : 1 / (v as number));
+                });
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+
+                for (let task of tasks) {
+                    expect(task.duration).toEqual(defaultTaskDuration);
+                }
+
+                done();
+            });
+        });
+
+        it("When task duration is float and duration unit 'second',  it should be round", (done) => {
+            defaultDataViewBuilder.valuesDuration = VisualData.getRandomUniqueNumbers(100, 1, 2, false);
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnResource,
+                VisualData.ColumnCompletePercentage
+            ]);
+
+            dataView.metadata.objects = {
+                general: {
+                    durationUnit: DurationUnit.Second
+                }
+            };
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+
+                for (let task of tasks) {
+                    expect(task.duration).toEqual(defaultTaskDuration);
+                }
+
+                done();
+            });
+        });
+
+        it("When task start time is missing, it should be set to today date", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnCompletePercentage]);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+
+                for (let task of tasks) {
+                    expect(task.start.toDateString()).toEqual(new Date(Date.now()).toDateString());
+                }
+
+                done();
+            });
+        });
+
+        it("Task Resource is Missing, not shown on dom", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnCompletePercentage]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let resources = visualBuilder.taskResources;
+                let returnResource = grep(resources);
+
+                expect(returnResource.length).toEqual(resources.length);
+                done();
+            });
+        });
+
+        it("Task Completion is Missing, not shown on dom", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let progressOfTasks = visualBuilder.taskProgress;
+                let returnTasks = grep(progressOfTasks);
+
+                expect(progressOfTasks.length).toEqual(returnTasks.length);
+                done();
+            });
+        });
+
+        // it("Task Completion width is equal task width", (done) => {
+        //     defaultDataViewBuilder.valuesCompletePercentage = VisualData.getRandomUniqueNumbers(
+        //         defaultDataViewBuilder.valuesTaskTypeResource.length, 0, 100
+        //     );
+
+        //     defaultDataViewBuilder.valuesCompletePercentage.forEach((value, index) => {
+        //         defaultDataViewBuilder.valuesCompletePercentage[index] = value * 0.01;
+        //     });
+
+        //     dataView = defaultDataViewBuilder.getDataView([
+        //         VisualData.ColumnTask,
+        //         VisualData.ColumnType,
+        //         VisualData.ColumnStartDate,
+        //         VisualData.ColumnDuration,
+        //         VisualData.ColumnCompletePercentage,
+        //         VisualData.ColumnResource]);
+
+
+        //     fixDataViewDateValuesAggregation(dataView);
+
+        //     visualBuilder.updateRenderTimeout(dataView, () => {
+        //         let progressOfTasks = visualBuilder.taskProgress;
+
+        //         let skippedParents: number = 0;
+        //         progressOfTasks.forEach((e, i) => {
+        //             let percent: number = defaultDataViewBuilder.valuesCompletePercentage[i - skippedParents];
+        //             let widthOfTask: number = parseFloat((visualBuilder.taskRect[i - skippedParents]).getAttribute("width") ?? "0");
+        //             let widthOfProgressTask: number = parseFloat(e.getAttribute("width") ?? "0");
+
+        //             const widthOfTaskFormatted = Math.floor((widthOfTask * percent)).toFixed(2);
+        //             const widthOfProgressTaskFormatted = Math.floor(widthOfProgressTask).toFixed(2);
+        //             expect(widthOfProgressTaskFormatted).toEqual(widthOfTaskFormatted);
+        //         });
+
+        //         done();
+        //     });
+        // });
+
+        it("Verify task labels have tooltips", (done) => {
+            defaultDataViewBuilder.valuesTaskTypeResource.forEach(x => x[1] = (x[1] + " ").repeat(5).trim());
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+            ]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const taskLabels: d3Selection<SVGGElement, Task, null, undefined> = d3SelectAll(visualBuilder.taskLabels);
+                const titles = taskLabels.select<SVGTitleElement>("title").nodes();
+                const taskData: Task[] = taskLabels.data();
+
+                let tasks: PrimitiveValue[] | undefined = dataView.categorical?.categories?.[0].values;
+
+                if (tasks) {
+                    for (let i = 0; i < tasks.length; i++) {
+                        expect(taskData[i].name).toEqual((titles[i]).textContent!);
+                        expect(tasks[i]).toEqual((titles[i]).textContent!);
+                    }
+                }
+
+                done();
+            });
+        });
+
+        it("Verify case if duration is not integer number", (done) => {
+            defaultDataViewBuilder.valuesDuration = VisualData.getRandomUniqueNumbers(
+                defaultDataViewBuilder.valuesTaskTypeResource.length, 0, 20, false);
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration]);
+
+            dataView.metadata.objects = {
+                general: {
+                    durationUnit: DurationUnit.Day
+                }
+            };
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+
+                for (let i in tasks) {
+                    let newDuration: number = tasks[i].duration;
+                    if (tasks[i].duration % 1 !== 0) {
+                        newDuration = (VisualClass as unknown as TransformDurationStatic).transformDuration(
+                            defaultDataViewBuilder.valuesDuration[i],
+                            DurationUnit.Minute,
+                            2
+                        );
+                    }
+
+                    expect(tasks[i].duration).toEqual(newDuration);
+                    expect(tasks[i].duration % 1 === 0).toBeTruthy();
+                }
+
+                done();
+            });
+        });
+
+        it("Verify tooltips have extra information", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnExtraInformation,
+                VisualData.ColumnResource]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                let index = 0;
+                for (let task of tasks) {
+                    for (let tooltipInfo of task.tooltipInfo) {
+                        if (tooltipInfo.displayName === VisualData.ColumnExtraInformation) {
+                            let value: string = tooltipInfo.value;
+
+                            expect(value).toEqual(defaultDataViewBuilder.valuesExtraInformation[index++]);
+                        }
+                    }
+                }
+
+                done();
+            });
+        });
+
+        it("Verify tooltips have extra information (date type)", (done) => {
+            let host: IVisualHost = createVisualHost({});
+            host.locale = host.locale || (<any>window.navigator).userLanguage || window.navigator["language"];
+            let dateFormatter: IValueFormatter = valueFormatter.create({ format: undefined, cultureSelector: host.locale });
+
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnExtraInformationDates]);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                for (let task of tasks) {
+                    for (let tooltipInfo of task.tooltipInfo) {
+                        if (tooltipInfo.displayName === VisualData.ColumnExtraInformation) {
+                            let value: string = tooltipInfo.value;
+
+                            expect(value).toEqual(dateFormatter.format(task.start));
+                        }
+                    }
+                }
+
+                done();
+            });
+        });
+
+        it("Verify tooltips have only string values", (done) => {
+            const randomNumber = 134223;
+            const durationUnit = DurationUnit.Day;
+
+            const task: any = {
+                taskType: randomNumber,
+                name: randomNumber,
+                start: new Date(),
+                end: new Date(),
+                duration: randomNumber,
+                completion: randomNumber,
+                extraInformation: []
+            };
+
+            const formatters = {
+                startDateFormatter: jasmine.createSpyObj("startDateFormatter", ["format"]),
+                completionFormatter: jasmine.createSpyObj("completionFormatter", ["format"])
+            };
+            const localizationManager = visualBuilder.visualHost.createLocalizationManager();
+
+            const tooltips = VisualClass.getTooltipInfo({ task, formatters, durationUnit, localizationManager, isEndDateFilled: false, roleLegendText: undefined });
+            tooltips
+                .filter(t => t.value !== null && t.value !== undefined)
+                .forEach(t => {
+                    expect(typeof t.value).toBe("string");
+                });
+            done();
+        });
+
+        it("Verify sub tasks", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnParent,
+                VisualData.ColumnResource]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const tasks = d3SelectAll(visualBuilder.tasks).data() as Task[],
+                    uniqueParentsCount: number = getUniqueParentsCount(dataView, 3);
+
+                expect(tasks.length).toEqual(defaultDataViewBuilder.valuesTaskTypeResource.length + uniqueParentsCount);
+
+                let parentIndex: number = 4;
+                let parentTask = visualBuilder.taskLabelsText[parentIndex];
+                clickElement(parentTask);
+
+                let childTaskMarginLeft: number = +(visualBuilder.taskLabelsText[++parentIndex].getAttribute("x") ?? 0);
+                expect(childTaskMarginLeft).toEqual(VisualClass["DefaultValues"]["TaskLineWidth"]);
+
+                done();
+            });
+        });
+
+        it("amount of expand/collapse buttons are the same as amount of parent tasks", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnParent,
+                VisualData.ColumnResource]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const tasks = d3SelectAll(visualBuilder.tasks).data() as Task[];
+                const parentTasks = tasks.filter((task) => task.children);
+
+                const taskLabels = visualBuilder.taskLabels;
+                const svgButtons = taskLabels
+                    .map((element) => element.querySelector("svg"))
+                    .filter((element) => element != null);
+
+                const uniqueParentsCount: number = getUniqueParentsCount(dataView, 3);
+
+                expect(parentTasks.length).toEqual(uniqueParentsCount);
+                expect(svgButtons.length).toEqual(uniqueParentsCount);
+
+                done();
+            });
+        });
+
+        it("Show collapse all arrow if parent is added", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent
+            ]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let collapseArrow = visualBuilder.collapseAllArrow;
+                expect(collapseArrow).toBeDefined();
+
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnType,
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration,
+                    VisualData.ColumnResource
+                ]);
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+
+                    let collapseArrow = visualBuilder.collapseAllArrow;
+                    expect(collapseArrow).toBeDefined();
+                    done();
+                });
+            });
+        });
+
+        describe("Verify tooltips have no completion info", () => {
+            function checkCompletionEqualNull(done: () => void) {
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    for (let task of tasks) {
+                        for (let tooltipInfo of task.tooltipInfo) {
+                            if (tooltipInfo.displayName === VisualData.ColumnCompletePercentage) {
+                                expect(tooltipInfo.value).toBeNull();
+                            }
+                        }
+                    }
+
+                    done();
+                });
+            }
+
+            it("TaskCompletion setting is switched off", (done) => {
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration,
+                    VisualData.ColumnCompletePercentage]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                dataView.metadata.objects = {
+                    taskCompletion: {
+                        show: false
+                    }
+                };
+
+                checkCompletionEqualNull(done);
+            });
+
+            it("Completion data unavailable", (done) => {
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                checkCompletionEqualNull(done);
+            });
+        });
+
+        describe("Verify tooltips have info according 'parent' data", () => {
+            function checkTasksHaveTooltipInfo(done: () => void) {
+                fixDataViewDateValuesAggregation(dataView);
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    for (let task of tasks) {
+                        if (!task.children) {
+                            expect(task.tooltipInfo.length).not.toEqual(0);
+                        }
+                    }
+
+                    done();
+                });
+            }
+
+            it("With parent data", (done) => {
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration,
+                    VisualData.ColumnParent]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                checkTasksHaveTooltipInfo(done);
+            });
+
+            it("Without parent data", (done) => {
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration]);
+
+                checkTasksHaveTooltipInfo(done);
+            });
+        });
+
+        it("Verify Font Size set to default", (done) => {
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const resource = visualBuilder.taskResources.find(x => x != null);
+                const label = visualBuilder.taskLabels.find(x => x != null)
+                    ?.querySelector<SVGGElement>("g.clickableArea")
+                    ?.querySelector<SVGTextElement>("text");
+
+                expect(resource).not.toBeNull();
+                expect(label).not.toBeNull();
+
+                expect(resource!.style.fontSize).toEqual("12px");
+                expect(label!.style.fontSize).toEqual("12px");
+
+                done();
+            });
+        });
+
+        for (const dateType of Object.values(DateType)) {
+            it(`Verify date format (${dateType})`, ((dateType) => (done) => {
+                switch (dateType) {
+                    case DateType.Second:
+                    case DateType.Minute:
+                    case DateType.Hour:
+                        defaultDataViewBuilder.valuesStartDate = VisualData.getRandomUniqueDates(
+                            defaultDataViewBuilder.valuesTaskTypeResource.length,
+                            new Date(2017, 7, 0),
+                            new Date(2017, 7, 1)
+                        );
+                        dataView = defaultDataViewBuilder.getDataView();
+                        break;
+                }
+
+                dataView.metadata.objects = { dateType: { type: dateType } };
+
+                let host: IVisualHost = createVisualHost({});
+                host.locale = host.locale || (<any>window.navigator).userLanguage || window.navigator["language"];
+
+                let xAxisDateFormatter: IValueFormatter = valueFormatter.create({
+                    format: VisualClass.DefaultValues.DateFormatStrings[dateType],
+                    cultureSelector: host.locale
+                });
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const texts = visualBuilder.axisTicksText;
+                    texts.forEach((e) => {
+                        let date: Date = new Date((<any>e).__data__);
+                        expect(e.textContent).toEqual(xAxisDateFormatter.format(date));
+                    });
+
+                    done();
+                });
+            })(dateType));
+        }
+
+        it(`Verify milestone line is present in dom`, (done) => {
+            let startDate: Date = new Date();
+            let endDate: Date = new Date();
+
+            startDate.setDate(startDate.getDate() - 30);
+            endDate.setDate(endDate.getDate() + 30);
+
+            defaultDataViewBuilder.valuesStartDate = VisualData.getRandomUniqueDates(
+                defaultDataViewBuilder.valuesTaskTypeResource.length,
+                startDate,
+                endDate
+            );
+            dataView = defaultDataViewBuilder.getDataView();
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                expect(visualBuilder.chartLine).toBeTruthy();
+
+                done();
+            });
+        });
+
+        it("Verify date format for culture which user have chosen", (done) => {
+            let host: IVisualHost = createVisualHost({});
+            host.locale = host.locale || (<any>window.navigator).userLanguage || window.navigator["language"];
+            let dateFormatter: IValueFormatter = valueFormatter.create({ format: undefined, cultureSelector: host.locale });
+
+            let formattedDates: string[] = [];
+            for (let date of defaultDataViewBuilder.valuesStartDate) {
+                formattedDates.push(dateFormatter.format(date));
+            }
+
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                for (let task of tasks) {
+                    for (let tooltipInfo of task.tooltipInfo) {
+                        if (tooltipInfo.displayName === "Start Date") {
+                            let value: string = tooltipInfo.value;
+                            let idx: number = formattedDates.indexOf(value);
+
+                            expect(value).toEqual(formattedDates[idx]);
+                            formattedDates.splice(idx, 1);
+                        }
+                    }
+                }
+
+                done();
+            });
+        });
+
+        it("Verify custom date format inside tooltip", (done) => {
+            dataView.metadata.objects = {
+                tooltipConfig: {
+                    dateFormat: "MMMM dd,yyyy"
+                }
+            };
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+
+                for (let task of tasks.filter(x => x.tooltipInfo)) {
+                    const tooltipInfoArray = task.tooltipInfo;
+                    tooltipInfoArray.forEach((tooltipInfo: VisualTooltipDataItem) => {
+                        if (tooltipInfo.displayName === "Start Date") {
+                            let value: string = tooltipInfo.value;
+
+                            expect(value).toMatch(/([a-z].)\s([0-9]{2}),([0-9]{0,4})/);
+                        }
+                    });
+                }
+
+                done();
+            });
+        });
+
+        it("Verify end date in tooltip", (done) => {
+            let host: IVisualHost = createVisualHost({});
+            host.locale = host.locale || (<any>window.navigator).userLanguage || window.navigator["language"];
+            let dateFormatter: IValueFormatter = valueFormatter.create({ format: undefined, cultureSelector: host.locale });
+
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration]);
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                for (let task of tasks) {
+                    for (let tooltipInfo of task.tooltipInfo) {
+                        if (tooltipInfo.displayName === "End Date") {
+                            expect(tooltipInfo.value).toBe(dateFormatter.format(task.end));
+                        }
+                    }
+                }
+
+                done();
+            });
+        });
+
+        it("Verify group tasks enabled", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration]);
+
+            dataView.metadata.objects = { general: { groupTasks: true } };
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const taskLinesText = visualBuilder.taskLabelsText;
+                const values = dataView.categorical?.categories?.[1].values;
+                const taskGroups = visualBuilder.tasksGroups;
+                const tasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+
+                expect(values?.length).toBeGreaterThan(lodashUniq(values).length);
+                expect(taskLinesText.length).toEqual(lodashUniq(values).length);
+                taskGroups.forEach((taskGroup: SVGGElement, index: number) => {
+                    const taskName: string | null = taskLinesText[index].children[0].textContent;
+                    const tasksWithSameName = tasks.filter((task) => task.name === taskName);
+                    expect(taskGroup.querySelectorAll(".task").length).toBe(tasksWithSameName.length);
+                });
+                done();
+            });
+        });
+
+        it("Verify group tasks enabled and then disabled", (done) => {
+
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration]);
+
+            dataView.metadata.objects = { general: { groupTasks: true } };
+
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                dataView.metadata.objects = { general: { groupTasks: false } };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const countOfTaskLines = visualBuilder.taskLabelsText.length;
+                    const values = dataView.categorical?.categories?.[1].values;
+                    const taskGroups = visualBuilder.tasksGroups;
+
+                    expect(countOfTaskLines).toEqual(values?.length ?? 0);
+                    // in each row only one task - all the task re-rendered right
+                    taskGroups.forEach((taskGroup: SVGGElement) => {
+                        expect(taskGroup.children.length).toBe(1);
+                    });
+                    done();
+                });
+            });
+        });
+
+        it("Common task bar test with Grouping = OFF", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent
+            ]);
+
+            dataView.metadata.objects = { general: { groupTasks: false } };
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                let parentTasks: Task[] = tasks.filter((task: Task) => task.children);
+
+                let parentIndex: number = getRandomNumber(0, parentTasks.length - 1),
+                    parentTask = parentTasks[parentIndex],
+                    parentTaskLabel = visualBuilder.taskLabelsText[parentTask.index];
+
+
+                const minChildStart = lodashMinBy(parentTask.children, (t: Task) => t.start)!.start;
+                const maxChildEnd = lodashMaxBy(parentTask.children, (t: Task) => t.end)!.end;
+                const color = parentTask.children[0].color;
+
+
+                clickElement(parentTaskLabel.parentElement);
+                let collapsedTasksList = visualBuilder.instance["collapsedTasks"];
+                dataView.metadata.objects = {
+                    collapsedTasks: {
+                        list: JSON.stringify(collapsedTasksList)
+                    },
+                    general: { groupTasks: false }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskGroups = visualBuilder.tasksGroups;
+                    const updatedTasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    const updatedParentTask = updatedTasks[parentTask.index];
+
+                    expect(updatedTasks.length).toBe(tasks.length - parentTask.children.length);
+                    expect(taskGroups.length).toBe(tasks.length - parentTask.children.length);
+                    expect(taskGroups[parentTask.index].children.length).toBe(1);
+
+                    expect(updatedParentTask.start).toEqual(minChildStart);
+                    expect(updatedParentTask.end).toEqual(maxChildEnd);
+                    expect(updatedParentTask.color).toBe(color);
+                    done();
+                });
+            });
+        });
+
+        it("Common task bar test with Grouping = ON", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent
+            ]);
+
+            dataView.metadata.objects = { general: { groupTasks: true } };
+            fixDataViewDateValuesAggregation(dataView);
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                let tasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                let parentTasks: Task[] = tasks.filter((task: Task) => task.children);
+
+                let parentIndex: number = getRandomNumber(0, parentTasks.length - 1),
+                    parentTask = parentTasks[parentIndex],
+                    parentTaskLabel = visualBuilder.taskLabelsText[parentTask.index];
+
+                const minChildStart = lodashMinBy(parentTask.children, (t: Task) => t.start)!.start;
+                const maxChildEnd = lodashMaxBy(parentTask.children, (t: Task) => t.end)!.end;
+
+                // Collapse
+                clickElement(parentTaskLabel.parentElement);
+                let collapsedTasksList = visualBuilder.instance["collapsedTasks"];
+                dataView.metadata.objects = {
+                    collapsedTasks: {
+                        list: JSON.stringify(collapsedTasksList)
+                    },
+                    general: { groupTasks: true }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskGroups = visualBuilder.tasksGroups;
+                    const updatedTasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    const updatedParentTask = updatedTasks[parentTask.index];
+                    const tasksWithSameName = updatedTasks.filter((task) => task.name === parentTask.name);
+
+                    // all params are similar because common task is not used with Grouping
+                    expect(updatedParentTask.start).not.toBe(minChildStart);
+                    expect(updatedParentTask.end).not.toBe(maxChildEnd);
+                    expect(updatedParentTask.children).toBeNull();
+                    expect(taskGroups[parentTask.index].children.length).toBe(tasksWithSameName.length);
+                    done();
+                });
+            });
+        });
+
+        it("Axis renders with correct date range when all grouped tasks are collapsed", (done) => {
+            // Construct a dataset where EVERY task is a child of one of two synthesized parent
+            // rows. Synthesized parent rows have null start/end (they are not aggregated from
+            // children in Group Tasks = ON mode). When all parents are collapsed at the time
+            // of the FIRST render — the actual "switching pages with collapsed groups" scenario
+            // from the bug report — only null-dated parent rows survive into `groupedTasks`.
+            // Before the fix this caused min/max to be undefined, the axis was skipped, and
+            // the background <rect> stayed with the default SVG black fill (the visible
+            // "black border" symptom). A re-render-after-collapse test is not sufficient,
+            // because d3 transitions leave the previous axis in the DOM and the assertion
+            // would pass on the buggy code too.
+            defaultDataViewBuilder.valuesTaskTypeResource = [
+                ["Spec", "MOLAP connectivity", "Mey", "Frontend"],
+                ["Dev", "Front End dev", "Sheng", "Frontend"],
+                ["Dev", "Tech design", "John", "Frontend"],
+                ["Spec", "Query Pipeline", "Just", "Backend"],
+                ["Spec", "Gateway", "Darshan", "Backend"],
+                ["Dev", "Connection", "Gentiana", "Backend"]
+            ];
+            defaultDataViewBuilder.valuesStartDate = VisualData.getRandomUniqueDates(
+                defaultDataViewBuilder.valuesTaskTypeResource.length,
+                new Date(2015, 7, 0), new Date(2017, 7, 0));
+            defaultDataViewBuilder.valuesDuration = VisualData.getRandomUniqueNumbers(
+                defaultDataViewBuilder.valuesTaskTypeResource.length, 3, 40);
+            defaultDataViewBuilder.valuesCompletePrecntege = VisualData.getRandomUniqueNumbers(
+                defaultDataViewBuilder.valuesTaskTypeResource.length);
+            defaultDataViewBuilder.valuesExtraInformation = VisualData.getTexts(
+                defaultDataViewBuilder.valuesTaskTypeResource, "Description");
+            defaultDataViewBuilder.valuesExtraInformationDates = VisualData.getRandomUniqueDates(
+                defaultDataViewBuilder.valuesTaskTypeResource.length,
+                new Date(2015, 7, 0), new Date(2017, 7, 0));
+
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent
+            ]);
+
+            // Persist both parents as collapsed BEFORE the first render — simulates the
+            // page-switch scenario where the visual mounts with an already-collapsed state.
+            dataView.metadata.objects = {
+                general: { groupTasks: true },
+                collapsedTasks: {
+                    list: JSON.stringify(["Frontend", "Backend"])
+                }
+            };
+            fixDataViewDateValuesAggregation(dataView);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                // Only the two synthesized parent rows are visible
+                const renderedTasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                expect(renderedTasks.length).toBe(2);
+                expect(renderedTasks.every(t => t.start == null && t.end == null)).toBeTrue();
+
+                // Axis renders with tick marks (was missing before the fix because min/max
+                // were undefined and `hasNotNullableDates` was false → `renderAxis` skipped)
+                const axisTicks = visualBuilder.axisTicks;
+                expect(axisTicks.length).toBeGreaterThan(0);
+
+                const axisTicksText = visualBuilder.axisTicksText;
+                expect(axisTicksText.length).toBeGreaterThan(0);
+                expect(axisTicksText[0].textContent).not.toBe("");
+
+                // Axis background rect is not painted black. We check the effective style —
+                // style("fill", …) wins over attr("fill", …), so testing the attribute alone
+                // would silently pass once the PR adds `attr("fill", "none")` at creation.
+                const axisBackgroundRect = visualBuilder.axisBackgroundRect;
+                expect(axisBackgroundRect).not.toBeNull();
+                const effectiveFill = (axisBackgroundRect as SVGRectElement).style.fill
+                    || (axisBackgroundRect as SVGRectElement).getAttribute("fill");
+                expect(effectiveFill).not.toBe("#000000");
+                expect(effectiveFill).not.toBe("black");
+                expect(effectiveFill).not.toBe("rgb(0, 0, 0)");
+
+                done();
+            });
+        });
+
+        it("Milestone test", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent,
+                VisualData.ColumnMilestones
+            ], true);
+
+            const milestoneColumnIndex = 5;
+            const categoriesColumn = dataView?.categorical?.categories?.[milestoneColumnIndex];
+            const uniqueMilestoneTypes = lodashUniq(categoriesColumn?.values).filter(x => !!x);
+
+            const randomColors = uniqueMilestoneTypes.map(() => getRandomHexColor());
+            const randomTypes = uniqueMilestoneTypes.map(() => {
+                const types = [MilestoneShape.Rhombus, MilestoneShape.Circle, MilestoneShape.Square];
+                return types[Math.floor(getRandomNumber(0, types.length - 1))];
+            });
+
+            if (dataView.categorical?.categories && !dataView.categorical.categories[milestoneColumnIndex].objects) {
+                dataView.categorical.categories[milestoneColumnIndex].objects = [];
+            }
+
+            categoriesColumn?.values.forEach((value: PrimitiveValue) => {
+                let milestoneSettingsObject: { milestones: { fill: any; shapeType: string } } | null = null;
+                if (value) {
+                    const index = uniqueMilestoneTypes.indexOf(value);
+                    milestoneSettingsObject = {
+                        milestones: {
+                            fill: VisualBuilder.getSolidColorStructuralObject(randomColors[index]),
+                            shapeType: randomTypes[index]
+                        }
+                    };
+                }
+
+                // @ts-ignore: Could not fix the type error.
+                dataView?.categorical?.categories?.[milestoneColumnIndex]?.objects?.push(milestoneSettingsObject);
+            });
+
+            // check for color and figure
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const tasks = d3SelectAll(visualBuilder.tasks).data() as Task[];
+                const taskWithMilestones = tasks.filter((task: Task) => task.Milestones?.length);
+                const milestones = visualBuilder.milestones;
+
+                expect(milestones.length).toBe(taskWithMilestones.length);
+
+                // for each unique milestone type must be its own color and shapeType
+                taskWithMilestones.forEach((task: Task) => {
+                    task.Milestones?.forEach((milestone: Milestone) => {
+                        const index = uniqueMilestoneTypes.indexOf(milestone.type);
+                        const expectedColor = randomColors[index];
+                        const actualColor = milestones[index]?.getAttribute("fill");
+                        expect(actualColor).toBe(expectedColor);
+                    });
+                });
+
+                done();
+            });
+        });
+
+        // Regression test for the fix landed in v3.4.7.0.
+        // Scenario (technical): milestone customizations exist ONLY in the per-instance
+        // `milestonesCategory.objects[index]` structure, and `milestones.persistSettings`
+        // is absent on the dataView. This is the on-disk shape of any report authored
+        // before v3.4.0 (when persistSettings was introduced) — most notably reports
+        // upgraded from v3.0.12.0 — but the same fallback / migration must apply whenever
+        // the persisted blob is empty for a given milestone name.
+        // Expected behavior in Reading view:
+        //   1. Legacy per-instance values are honored when rendering (no fallback to default
+        //      palette colors / rotated default shapes).
+        //   2. The resolved values are persisted in a one-time migration save, so subsequent
+        //      renders read from the stable `persistSettings` blob.
+        it("Reading view: legacy per-instance milestone settings are honored and migrated when persistSettings is empty", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent,
+                VisualData.ColumnMilestones
+            ], true);
+
+            const milestoneColumnIndex = 5;
+            const categoriesColumn = dataView?.categorical?.categories?.[milestoneColumnIndex];
+            const uniqueMilestoneTypes = lodashUniq(categoriesColumn?.values).filter(x => !!x);
+
+            // Pre-pick deterministic colors/shapes so we can assert exact values.
+            const expectedColors = uniqueMilestoneTypes.map((_, i) => `#11${(i + 1).toString().padStart(2, "0")}99`);
+            const expectedShapes = uniqueMilestoneTypes.map((_, i) =>
+                [MilestoneShape.Rhombus, MilestoneShape.Circle, MilestoneShape.Square][i % 3]
+            );
+
+            // Populate ONLY the legacy per-instance `objects` storage and leave
+            // `metadata.objects.milestones.persistSettings` untouched — exactly the on-disk
+            // shape of a report authored before v3.4.0 (e.g. an upgrade from v3.0.12.0).
+            if (dataView.categorical?.categories && !dataView.categorical.categories[milestoneColumnIndex].objects) {
+                dataView.categorical.categories[milestoneColumnIndex].objects = [];
+            }
+            categoriesColumn?.values.forEach((value: PrimitiveValue) => {
+                let milestoneSettingsObject: { milestones: { fill: any; shapeType: string } } | null = null;
+                if (value) {
+                    const index = uniqueMilestoneTypes.indexOf(value);
+                    milestoneSettingsObject = {
+                        milestones: {
+                            fill: VisualBuilder.getSolidColorStructuralObject(expectedColors[index]),
+                            shapeType: expectedShapes[index]
+                        }
+                    };
+                }
+                // @ts-ignore: matches existing "Milestone test" shape
+                dataView?.categorical?.categories?.[milestoneColumnIndex]?.objects?.push(milestoneSettingsObject);
+            });
+
+            // Sanity check: persistSettings is genuinely absent — the precondition for migration.
+            expect(dataView.metadata?.objects?.milestones).toBeUndefined();
+
+            // Spy on the host so we can assert the one-time migration save fires in Reading view.
+            const persistSpy = spyOn(visualBuilder.visualHost, "persistProperties").and.callThrough();
+
+            // Drive update() directly so we can pass viewMode = View — `VisualBuilderBase.update()`
+            // does not surface a viewMode argument.
+            visualBuilder.instance.update({
+                dataViews: [dataView],
+                viewport: visualBuilder.viewport,
+                viewMode: powerbi.ViewMode.View
+            } as powerbi.extensibility.visual.VisualUpdateOptions);
+
+            setTimeout(() => {
+                // (1) Read path fix — milestones must render with the legacy color, NOT a palette default.
+                const tasks = d3SelectAll(visualBuilder.tasks).data() as Task[];
+                const taskWithMilestones = tasks.filter((task: Task) => task.Milestones?.length);
+                const milestones = visualBuilder.milestones;
+                expect(milestones.length).toBe(taskWithMilestones.length);
+
+                taskWithMilestones.forEach((task: Task) => {
+                    task.Milestones?.forEach((milestone: Milestone) => {
+                        const idx = uniqueMilestoneTypes.indexOf(milestone.type);
+                        const actualColor = milestones[idx]?.getAttribute("fill");
+                        expect(actualColor).toBe(expectedColors[idx]);
+                    });
+                });
+
+                // (2) Migration save — host.persistProperties must be called once with a non-empty
+                // persistSettings JSON containing the resolved legacy values keyed by milestone name.
+                const milestonesCalls = persistSpy.calls.allArgs()
+                    .map(args => (args[0] as powerbi.VisualObjectInstancesToPersist).merge ?? [])
+                    .reduce((acc, list) => acc.concat(list), [] as powerbi.VisualObjectInstance[])
+                    .filter(inst => inst.objectName === "milestones");
+
+                expect(milestonesCalls.length).toBeGreaterThan(0);
+
+                const persistSettingsJson = milestonesCalls[0].properties?.persistSettings as string;
+                expect(typeof persistSettingsJson).toBe("string");
+                const persisted = JSON.parse(persistSettingsJson);
+                uniqueMilestoneTypes.forEach((name, i) => {
+                    expect(persisted[name as string]).toBeDefined();
+                    expect(persisted[name as string].fill?.solid?.color).toBe(expectedColors[i]);
+                    expect(persisted[name as string].shapeType).toBe(expectedShapes[i]);
+                });
+
+                done();
+            }, 100);
+        });
+
+        it("Common milestone test", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent,
+                VisualData.ColumnMilestones
+            ], true);
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const tasks: Task[] = d3SelectAll(visualBuilder.tasks).data() as Task[];
+                const parentTasks: Task[] = tasks.filter((task: Task) => task.children);
+                const oldMilestones = visualBuilder.milestones;
+
+                let parentIndex: number = getRandomNumber(0, parentTasks.length - 1),
+                    parentTask = parentTasks[parentIndex],
+                    parentTaskLabel = visualBuilder.taskLabelsText[parentTask.index];
+
+                // get uniq by date child milestones for current parent - they should be rendered on parent task bar
+                const childMilestones = parentTask.children.map((childTask: Task) => {
+                    if (childTask.Milestones?.length) {
+                        return childTask.Milestones;
+                    }
+                });
+                let mergedMilestone: Milestone[] = parentTask.Milestones || [];
+                childMilestones.forEach((milestoneArr) => {
+                    if (milestoneArr) {
+                        mergedMilestone = mergedMilestone.concat(milestoneArr);
+                    }
+                });
+
+                const uniqDates = lodashUniqBy(mergedMilestone, "start");
+
+                // Collapse
+                clickElement(parentTaskLabel.parentNode);
+                let collapsedTasksList = visualBuilder.instance["collapsedTasks"];
+                dataView.metadata.objects = {
+                    collapsedTasks: {
+                        list: JSON.stringify(collapsedTasksList)
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const updatedTasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    const updatedParentTask = updatedTasks[parentTask.index];
+                    const milestones = visualBuilder.milestones;
+                    const updatedTasksWithMilestones = updatedTasks.filter((t: Task) => t.Milestones?.length && t.index !== parentTask.index);
+
+                    expect(milestones.length).toBe(oldMilestones.length - ((updatedParentTask.Milestones?.length ?? 0) - uniqDates.length));
+                    expect(updatedParentTask.Milestones?.length).toBe(mergedMilestone?.length);
+
+                    updatedTasksWithMilestones.forEach((t: Task) => {
+                        expect(t.Milestones?.length).toBe(1);
+                    });
+
+                    done();
+                });
+            });
+        });
+
+        // Regression coverage for the synthetic parent row built in
+        // `addTaskToParentTask`. It is a pure container: when expanded its
+        // `Milestones` array stays empty, so no marker is rendered on the
+        // summary row, and on collapse `updateCommonMilestones` aggregates
+        // children's milestones without duplicating the first child.
+        // See `createParentTask` JSDoc for the full contract.
+        it("Expanded parent rows must not carry inherited milestones", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent,
+                VisualData.ColumnMilestones
+            ], true);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const tasks: Task[] = d3SelectAll(visualBuilder.tasks).data() as Task[];
+                const parentTasks: Task[] = tasks.filter((task: Task) => task.children);
+                expect(parentTasks.length).toBeGreaterThan(0);
+
+                // Synthetic parent rows are pure containers — their Milestones
+                // array must stay empty while they are expanded. Aggregation
+                // onto the parent only happens on collapse, via
+                // `updateCommonMilestones`.
+                parentTasks.forEach((parent: Task) => {
+                    expect(parent.Milestones?.length ?? 0).toBe(0);
+                });
+
+                done();
+            });
+        });
+
+        it("Expanded parent rows render no milestone markers", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent,
+                VisualData.ColumnMilestones
+            ], true);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const parentTaskGroups = visualBuilder.tasks.filter((g: SVGGElement) => {
+                    const datum = d3Select(g).datum() as Task;
+                    return !!datum?.children;
+                });
+                expect(parentTaskGroups.length).toBeGreaterThan(0);
+
+                // No <path> milestone marker should exist inside any parent
+                // task's <g.task-milestone>.
+                parentTaskGroups.forEach((g: SVGGElement) => {
+                    const markers = g.querySelectorAll<SVGPathElement>("g.task-milestone path");
+                    expect(markers.length).toBe(0);
+                });
+
+                done();
+            });
+        });
+
+        it("Collapsed parent rolls up only children's milestones — no first-child duplicate", (done) => {
+            dataView = defaultDataViewBuilder.getDataView([
+                VisualData.ColumnType,
+                VisualData.ColumnTask,
+                VisualData.ColumnStartDate,
+                VisualData.ColumnDuration,
+                VisualData.ColumnResource,
+                VisualData.ColumnParent,
+                VisualData.ColumnMilestones
+            ], true);
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const tasks: Task[] = d3SelectAll(visualBuilder.tasks).data() as Task[];
+                const parentTasks: Task[] = tasks.filter((task: Task) => task.children);
+
+                // Pick a parent whose first child has at least one milestone —
+                // this is the exact scenario the regression touches (the seeded
+                // milestone would have been a duplicate of the first child).
+                const parentTask = parentTasks.find((p: Task) => p.children?.[0]?.Milestones?.length);
+                expect(parentTask).toBeDefined();
+
+                const expectedChildMilestonesCount = (parentTask!.children || [])
+                    .reduce((sum: number, child: Task) => sum + (child.Milestones?.length ?? 0), 0);
+
+                const parentTaskLabel = visualBuilder.taskLabelsText[parentTask!.index];
+                clickElement(parentTaskLabel.parentNode);
+                const collapsedTasksList = visualBuilder.instance["collapsedTasks"];
+                dataView.metadata.objects = {
+                    collapsedTasks: {
+                        list: JSON.stringify(collapsedTasksList)
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const updatedTasks: Task[] = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    const updatedParent = updatedTasks[parentTask!.index];
+
+                    // After collapse, parent.Milestones must equal exactly the
+                    // children's milestones — not children + 1 (duplicate of the
+                    // first child seeded by the old constructor).
+                    expect(updatedParent.Milestones?.length ?? 0).toBe(expectedChildMilestonesCount);
+
+                    done();
+                });
+            });
+        });
+    });
+
+    describe("Selection", () => {
+        describe("Single selection", () => {
+            it("should highlight a proper data point after external filtering", () => {
+                const selectionIds: MockISelectionId[] = [];
+                let selectionIndex: number = -1;
+
+                const customMockISelectionIdBuilder = new MockISelectionIdBuilder();
+                customMockISelectionIdBuilder.createSelectionId = () => {
+                    selectionIndex++;
+
+                    if (selectionIds[selectionIndex]) {
+                        return selectionIds[selectionIndex];
+                    }
+
+                    const selectionId: MockISelectionId = new MockISelectionId(`${selectionIndex}`);
+
+                    selectionIds.push(selectionId);
+
+                    return selectionId;
+                };
+
+                visualBuilder.visualHost.createSelectionIdBuilder = () => customMockISelectionIdBuilder;
+                visualBuilder.updateFlushAllD3Transitions(dataView);
+
+                // can't use lodash.deepCopy because we need to keep identity references
+                const filteredDataView: DataView = {
+                    ...dataView,
+                    categorical: {
+                        ...dataView.categorical,
+                        categories: dataView.categorical?.categories?.map((category) => {
+                            return {
+                                ...category,
+                                values: category.values.slice(0, 2)
+                            };
+                        })
+                    }
+                };
+
+                selectionIndex = -1;
+
+                visualBuilder.updateFlushAllD3Transitions(filteredDataView);
+
+                clickElement(visualBuilder.tasks[0]);
+
+                const selectedDataPoints: Task[] = getSelectedTasks(visualBuilder);
+
+                selectionIndex = -1;
+
+                visualBuilder.updateFlushAllD3Transitions(dataView);
+
+                const selectedDataPointsAfterUpdateCall: Task[] = getSelectedTasks(visualBuilder);
+
+                expect(selectedDataPoints.length).toBe(selectedDataPointsAfterUpdateCall.length);
+
+                selectedDataPoints.forEach((selectedDataPoint: Task, index: number) => {
+                    const selectedDataPointAfterUpdateCall: Task = selectedDataPointsAfterUpdateCall[index];
+
+                    expect(selectedDataPoint.name).toBe(selectedDataPointAfterUpdateCall.name);
+                    expect(selectedDataPoint.resource).toBe(selectedDataPointAfterUpdateCall.resource);
+                    expect(selectedDataPoint.identity).toBe(selectedDataPointAfterUpdateCall.identity);
+                });
+            });
+
+            function getSelectedTasks(visualBuilder: VisualBuilder): Task[] {
+                // access private properties
+                return (visualBuilder.instance["behavior"]["options"]["dataPoints"] as Task[])
+                    .filter((task: Task) => task && task.selected);
+            }
+        });
+
+        describe("Multi selection", () => {
+            it("two data points should be selected", () => {
+                visualBuilder.updateFlushAllD3Transitions(dataView);
+
+                const firstGroup = visualBuilder.tasks[0];
+                const secondGroup = visualBuilder.tasks[1];
+                const thirdGroup = visualBuilder.tasks[2];
+
+                clickElement(firstGroup);
+                clickElement(secondGroup, true);
+
+                expect(parseFloat(firstGroup.style.opacity)).toBe(1);
+                expect(parseFloat(secondGroup.style.opacity)).toBe(1);
+                expect(parseFloat(thirdGroup.style.opacity)).toBeLessThan(1);
+            });
+        });
+
+        describe("Selection with keyboard", () => {
+            it("data point is selected on 'Enter'", () => {
+                visualBuilder.updateFlushAllD3Transitions(dataView);
+
+                const firstGroup = visualBuilder.tasks[0];
+                const secondGroup = visualBuilder.tasks[1];
+                const thirdGroup = visualBuilder.tasks[2];
+
+                firstGroup.dispatchEvent(new KeyboardEvent("keydown", { code: "Enter" }));
+
+                expect(parseFloat(firstGroup.style.opacity)).toBe(1);
+                expect(parseFloat(secondGroup.style.opacity)).toBeLessThan(1);
+                expect(parseFloat(thirdGroup.style.opacity)).toBeLessThan(1);
+            });
+
+            it("data point are selected on 'Enter' with modifier keys", () => {
+                testKeyboardEvent(new KeyboardEvent("keydown", { code: "Enter" }), new KeyboardEvent("keydown", { code: "Enter", ctrlKey: true }));
+                testKeyboardEvent(new KeyboardEvent("keydown", { code: "Enter" }), new KeyboardEvent("keydown", { code: "Enter", shiftKey: true }));
+                testKeyboardEvent(new KeyboardEvent("keydown", { code: "Enter" }), new KeyboardEvent("keydown", { code: "Enter", metaKey: true }));
+
+                testKeyboardEvent(new KeyboardEvent("keydown", { code: "Space" }), new KeyboardEvent("keydown", { code: "Space", ctrlKey: true }));
+                testKeyboardEvent(new KeyboardEvent("keydown", { code: "Space" }), new KeyboardEvent("keydown", { code: "Space", shiftKey: true }));
+                testKeyboardEvent(new KeyboardEvent("keydown", { code: "Space" }), new KeyboardEvent("keydown", { code: "Space", metaKey: true }));
+            });
+
+            function testKeyboardEvent(firstKeyboardEvent: KeyboardEvent, secondKeyboardEvent: KeyboardEvent) {
+                visualBuilder.updateFlushAllD3Transitions(dataView);
+
+                const firstGroup = visualBuilder.tasks[0];
+                const secondGroup = visualBuilder.tasks[1];
+                const thirdGroup = visualBuilder.tasks[2];
+
+                firstGroup.dispatchEvent(firstKeyboardEvent);
+                secondGroup.dispatchEvent(secondKeyboardEvent);
+
+                expect(parseFloat(firstGroup.style.opacity)).toBe(1);
+                expect(parseFloat(secondGroup.style.opacity)).toBe(1);
+                expect(parseFloat(thirdGroup.style.opacity)).toBeLessThan(1);
+
+            }
+        });
+    });
+
+    describe("Format settings test", () => {
+        describe("General", () => {
+            it("Scroll to current time", (done) => {
+                let todayDate = new Date();
+                let startDate = new Date();
+                let endDate = new Date();
+
+                startDate.setDate(todayDate.getDate() - datesAmountForScroll);
+                endDate.setDate(todayDate.getDate() + datesAmountForScroll);
+
+                defaultDataViewBuilder.valuesStartDate = VisualData.getRandomUniqueDates(
+                    defaultDataViewBuilder.valuesTaskTypeResource.length,
+                    startDate,
+                    endDate
+                );
+                dataView = defaultDataViewBuilder.getDataView();
+                dataView.metadata.objects = {
+                    general: {
+                        scrollToCurrentTime: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    expect(visualBuilder.body).toBeDefined();
+                    expect(visualBuilder.body!.scrollLeft).not.toEqual(0);
+                    done();
+                });
+            });
+
+            describe("Text wrapping", () => {
+                it("Should wrap text when shouldWrapText is true", (done) => {
+                    // Create data with long task names that will need wrapping
+                    const longTaskName = "This is a very long task name that should be wrapped across multiple lines to test the text wrapping functionality properly";
+                    defaultDataViewBuilder.valuesTaskTypeResource = [
+                        [longTaskName, longTaskName, "Parent1"],
+                        [longTaskName, longTaskName, "Parent2"],
+                        [longTaskName, longTaskName, "Parent3"]
+                    ];
+                    dataView = defaultDataViewBuilder.getDataView([
+                        VisualData.ColumnTask,
+                        VisualData.ColumnStartDate,
+                        VisualData.ColumnDuration]);
+
+                    fixDataViewDateValuesAggregation(dataView);
+
+                    dataView.metadata.objects = {
+
+                        taskConfig: {
+                            height: 90
+                        },
+                        taskLabels: {
+                            shouldWrapText: true,
+                            show: true,
+                            width: 200
+                        }
+                    };
+
+                    visualBuilder.updateRenderTimeout(dataView, () => {
+                        const taskLabelsText = visualBuilder.taskLabelsText.filter(
+                            (el: SVGTextElement) => el.textContent && el.textContent.trim() !== ""
+                        );
+                        expect(taskLabelsText.length).toBeGreaterThan(0);
+                        let hasWrappedText = false;
+                        taskLabelsText.forEach((textElement: SVGTextElement) => {
+                            const tspans = textElement.querySelectorAll("tspan");
+                            if (tspans.length > 1) {
+                                hasWrappedText = true;
+                                // Verify tspans have different dy values (stacked vertically)
+                                const secondDy = parseFloat(tspans[1].getAttribute("dy") || "0");
+                                expect(secondDy).toBeGreaterThan(0);
+                            }
+                        });
+
+                        expect(hasWrappedText).toBe(true);
+                        done();
+                    });
+                });
+
+                it("Should use default wrapping behavior when setting is undefined", (done) => {
+                    dataView = defaultDataViewBuilder.getDataView([
+                        VisualData.ColumnTask,
+                        VisualData.ColumnStartDate,
+                        VisualData.ColumnDuration]);
+
+                    fixDataViewDateValuesAggregation(dataView);
+
+                    // No wrapping setting specified - should use default (false)
+                    dataView.metadata.objects = {
+                        general: {}
+                    };
+
+                    visualBuilder.updateRenderTimeout(dataView, () => {
+                        const taskLabelsText = visualBuilder.taskLabelsText;
+                        expect(taskLabelsText.length).toBeGreaterThan(0);
+                        // Should complete without error
+                        done();
+                    });
+                });
+            });
+
+            describe("Duration units", () => {
+
+                function checkDurationUnit(durationUnit: DurationUnit) {
+                    const tasks: Task[] = d3Select(visualBuilder.element)
+                        .selectAll(".task")
+                        .data() as Task[];
+
+                    tasks.forEach(task => {
+                        if (task.duration) {
+                            const dates: Date[] = getEndDate(durationUnit, task.start, task.end);
+                            expect(dates.length).toEqual(task.duration);
+                        }
+                    });
+                }
+
+                function setDurationUnit(durationUnit: DurationUnit) {
+                    dataView.metadata.objects = {
+                        general: {
+                            durationUnit: durationUnit
+                        }
+                    };
+                }
+
+                it("days", (done) => {
+                    const durationUnit: DurationUnit = DurationUnit.Day;
+                    setDurationUnit(durationUnit);
+
+                    fixDataViewDateValuesAggregation(dataView);
+
+                    visualBuilder.updateRenderTimeout(dataView, () => {
+                        checkDurationUnit(durationUnit);
+                        done();
+                    });
+                });
+
+                it("hours", (done) => {
+                    const durationUnit: DurationUnit = DurationUnit.Hour;
+                    setDurationUnit(durationUnit);
+
+                    fixDataViewDateValuesAggregation(dataView);
+
+                    visualBuilder.updateRenderTimeout(dataView, () => {
+                        checkDurationUnit(durationUnit);
+                        done();
+                    });
+                });
+
+                it("minutes", (done) => {
+                    const durationUnit: DurationUnit = DurationUnit.Minute;
+                    setDurationUnit(durationUnit);
+
+                    fixDataViewDateValuesAggregation(dataView);
+
+                    visualBuilder.updateRenderTimeout(dataView, () => {
+                        checkDurationUnit(durationUnit);
+                        done();
+                    });
+                });
+
+                it("seconds", (done) => {
+                    const durationUnit = DurationUnit.Second;
+                    setDurationUnit(durationUnit);
+
+                    fixDataViewDateValuesAggregation(dataView);
+
+                    visualBuilder.updateRenderTimeout(dataView, () => {
+                        checkDurationUnit(durationUnit);
+                        done();
+                    });
+                });
+
+            });
+
+            describe("Duration units downgrade", () => {
+                const firstTaskDuration = 4404;
+                const secondTaskDuration = 1;
+                const thirdTaskDuration = 1.12;
+                const secondInHour = 3600;
+
+                it("hour to second", done => {
+                    const tasks = [
+                        {
+                            wasDowngradeDurationUnit: true,
+                            stepDurationTransformation: 2,
+                            duration: firstTaskDuration
+                        },
+                        {
+                            wasDowngradeDurationUnit: false,
+                            stepDurationTransformation: 0,
+                            duration: secondTaskDuration
+                        },
+                        {
+                            wasDowngradeDurationUnit: false,
+                            stepDurationTransformation: 0,
+                            duration: thirdTaskDuration
+                        }
+                    ];
+
+                    visualBuilder.downgradeDurationUnit(tasks, DurationUnit.Second);
+                    expect(tasks[0].duration).toEqual(firstTaskDuration);
+                    expect(tasks[1].duration).toEqual(Math.floor(secondTaskDuration * secondInHour));
+                    expect(tasks[2].duration).toEqual(Math.floor(thirdTaskDuration * secondInHour));
+
+                    done();
+                });
+            });
+        });
+
+        describe("Days off", () => {
+            it("color", (done) => {
+                const color: string = getRandomHexColor();
+                dataView.metadata.objects = {
+                    daysOff: {
+                        show: true,
+                        fill: VisualBuilder.getSolidColorStructuralObject(color)
+                    }
+                };
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskDaysOffRect.forEach(e => {
+                        if (e == null) {
+                            return;
+                        }
+                        assertColorsMatch(e.style.fill, color);
+                    });
+
+                    done();
+                });
+            });
+
+            function checkDaysOff(dayForCheck: Day, done: () => void): void {
+                const color: string = getRandomHexColor();
+                dataView.metadata.objects = {
+                    daysOff: {
+                        show: true,
+                        fill: VisualBuilder.getSolidColorStructuralObject(color),
+                        firstDayOfWeek: +dayForCheck
+                    }
+                };
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskDaysOffRect.forEach((e: SVGPathElement | null) => {
+                        if (e == null) {
+                            return;
+                        }
+
+                        const isParentTask: boolean = e!.hasChildNodes();
+                        const elementData = d3Select(e).datum() as TaskDaysOff & { parentTask: Task };
+                        const daysOff: DayOffData = elementData.daysOff;
+
+                        if (!isParentTask) {
+                            const amountOfWeekendDays: number = daysOff[1];
+
+                            // Use d3TimeDay.offset instead of raw millisecond arithmetic
+                            // to correctly handle DST (Daylight Saving Time) transitions (which can cause
+                            // date + N*86400000ms to land on the wrong calendar day)
+                            const firstDayOfWeek: Date = d3TimeDay.offset(daysOff[0], amountOfWeekendDays);
+
+                            expect(firstDayOfWeek.getDay()).toEqual(+dayForCheck);
+                        }
+                    });
+                    done();
+                });
+            }
+
+            for (let day in Day) {
+                it(`Verify day off (${day}) for 'Day' date type`, ((day) => (done) => {
+                    dataView = defaultDataViewBuilder.getDataView();
+
+                    dataView.metadata.objects = {
+                        daysOff: {
+                            show: true,
+                            firstDayOfWeek: +Day[day as keyof typeof Day]
+                        }
+                    };
+
+                    fixDataViewDateValuesAggregation(dataView);
+
+                    checkDaysOff(Day[day as keyof typeof Day], done);
+                })(day));
+            }
+
+            it(`Verify end date of task is weekend date`, (done) => {
+                let startDate: Date = new Date(2017, 8, 29); // It's a last day of working week
+                let endDate: Date = new Date(2017, 8, 30);
+
+                defaultDataViewBuilder.valuesStartDate = VisualData.getRandomUniqueDates(
+                    defaultDataViewBuilder.valuesTaskTypeResource.length,
+                    startDate,
+                    endDate
+                );
+                defaultDataViewBuilder.valuesDuration = VisualData.getRandomUniqueNumbers(
+                    defaultDataViewBuilder.valuesTaskTypeResource.length, 30, 48);
+                dataView = defaultDataViewBuilder.getDataView();
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                dataView.metadata.objects = {
+                    general: {
+                        durationUnit: DurationUnit.Hour
+                    },
+                    dateType: {
+                        type: DateType.Hour
+                    },
+                    daysOff: {
+                        show: true,
+                        firstDayOfWeek: +Day.Monday
+                    }
+                };
+
+                checkDaysOff(Day.Monday, done);
+            });
+        });
+
+        describe("Sub tasks", () => {
+            beforeEach(() => {
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnType,
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration,
+                    VisualData.ColumnParent]);
+
+                fixDataViewDateValuesAggregation(dataView);
+            });
+
+            it("inherit parent legend", (done) => {
+                dataView.metadata.objects = {
+                    subTasks: {
+                        inheritParentLegend: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const tasks = d3Select(visualBuilder.element)
+                        .selectAll(".task")
+                        .data() as Task[];
+
+                    tasks.forEach((task: Task) => {
+                        if (task.parent) {
+                            const parentName = task.parent.substring(0, task.parent.length - task.name.length - 1);
+                            const parentTask: Task = tasks.find(t => t.name == parentName) as Task;
+
+                            if (parentTask) {
+                                expect(task.taskType).toEqual(parentTask.taskType);
+                            }
+                        }
+                    });
+
+                    done();
+                });
+            });
+
+            it("parent duration by children", (done) => {
+                dataView.metadata.objects = {
+                    subTasks: {
+                        parentDurationByChildren: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    let { parents, children } = getChildrenAndParents(tasks);
+
+                    parents.forEach((parent: Task) => {
+                        const start: Date = (lodashMinBy(children[parent.name], (childTask: Task) => childTask.start))!.start;
+                        const end: Date = (lodashMaxBy(children[parent.name], (childTask: Task) => childTask.end))!.end;
+
+                        expect(parent.start).toEqual(start);
+                        expect(parent.end).toEqual(end);
+
+                        const newDuration: number = d3TimeDay.range(start, end).length;
+                        expect(parent.duration).toEqual(newDuration);
+                    });
+
+                    done();
+                });
+            });
+
+            it("parent completion by children", (done) => {
+                dataView.metadata.objects = {
+                    subTasks: {
+                        parentCompletionByChildren: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    let { parents, children } = getChildrenAndParents(tasks);
+
+                    parents.forEach((parent: Task) => {
+                        const childrenAverageCompletion: number = children[parent.name]
+                            .reduce((prevValue, currentTask) => prevValue + currentTask.completion, 0) /
+                            children[parent.name].length;
+
+                        expect(parent.completion).toEqual(childrenAverageCompletion);
+
+                    });
+
+                    done();
+                });
+            });
+
+            it("sorting both parents and subtasks (tasks asc)", (done) => {
+                dataView.metadata.columns[1].sort = 1; // 1 - ascending order
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    assertSortingOrderAsc(tasks);
+                    done();
+                });
+            });
+
+            it("sorting both parents and subtasks (tasks desc)", (done) => {
+                dataView.metadata.columns[1].sort = 2; // 2 - descending order
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    assertSortingOrderDesc(tasks);
+                    done();
+                });
+            });
+
+            it("sorting both parents and subtasks (parent asc)", (done) => {
+
+                dataView.metadata.columns[2].sort = 1; // 1 - ascending order
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    assertSortingOrderAsc(tasks);
+                    done();
+                });
+            });
+
+            it("sorting both parents and subtasks (parent desc)", (done) => {
+                dataView.metadata.columns[2].sort = 2; // 2 - descending order
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+                    assertSortingOrderDesc(tasks);
+                    done();
+                });
+            });
+
+            function assertSortingOrderAsc(tasks: Task[]) {
+                let prevIndex: number = 0;
+
+                for (let i = 1; i < tasks.length; ++i) {
+                    if (!tasks[i].parent) {
+                        expect(tasks[i].name >= tasks[prevIndex].name);
+                        prevIndex = i;
+                    }
+                }
+            }
+
+            function assertSortingOrderDesc(tasks: Task[]) {
+                let prevIndex: number = 0;
+
+                for (let i = 1; i < tasks.length; ++i) {
+                    if (!tasks[i].parent) {
+                        expect(tasks[i].name <= tasks[prevIndex].name);
+                        prevIndex = i;
+                    }
+                }
+            }
+
+            function getChildrenAndParents(tasks: Task[]) {
+                let children: { [key: string]: Task[] } = {};
+                let parents: Task[] = [];
+                tasks.forEach((task) => {
+                    if (task.parent) {
+                        const parentName = task.parent.substring(0, task.parent.length - task.name.length - 1);
+
+                        const parentTask: Task | undefined = tasks.find(t => t.name == parentName);
+
+                        if (parentTask) {
+                            if (!parents.find(parent => parent.name = parentTask.name)) {
+                                parents.push(parentTask);
+                            }
+
+                            if (!children[parentTask.name]) {
+                                children[parentTask.name] = [];
+                            }
+
+                            children[parentTask.name].push(task);
+                        }
+                    }
+                });
+
+                return { parents, children };
+            }
+        });
+
+        describe("Data labels", () => {
+            beforeEach(() => {
+                dataView.metadata.objects = {
+                    taskResource: {
+                        show: true
+                    }
+                };
+
+            });
+
+            it("show", (done) => {
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    expect(visualBuilder.taskResources).toBeTruthy();
+
+                    done();
+                });
+            });
+
+            it("hide", (done) => {
+                dataView.metadata.objects = {
+                    taskResource: {
+                        show: false
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    expect(visualBuilder.taskResources.length).toEqual(0);
+
+                    done();
+                });
+            });
+
+            it("color", (done) => {
+                let color: string = getRandomHexColor();
+                dataView.metadata.objects = {
+                    taskResource: {
+                        fill: VisualBuilder.getSolidColorStructuralObject(color)
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskResources.forEach(e =>
+                        assertColorsMatch(e.style.fill, color));
+
+                    done();
+                });
+            });
+
+            it("fontSize", (done) => {
+                const fontSize: number = 10;
+                dataView.metadata.objects = {
+                    taskResource: {
+                        fontSize
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskResources.forEach(e => {
+                        let fontSizeEl: string = e.style.fontSize;
+                        fontSizeEl = fontSizeEl.substring(0, fontSizeEl.length - 2);
+
+                        let fontSizePoint: string = PixelConverter.fromPoint(fontSize);
+                        fontSizePoint = (+(fontSizePoint.substring(0, fontSizePoint.length - 2))).toFixed(4);
+
+                        expect(fontSizeEl).toEqual(fontSizePoint);
+                    });
+
+                    done();
+                });
+            });
+
+            it("position", (done) => {
+                dataView.metadata.objects = {
+                    taskResource: {
+                        position: ResourceLabelPosition.Top
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    let taskRects: any[] = visualBuilder.taskRect;
+                    visualBuilder.taskResources.forEach((e, i) => {
+                        const text: string | null = e.textContent;
+                        const taskResourcesX = +(e.getAttribute("x") ?? 0);
+                        const taskResourcesY = +(e.getAttribute("y") ?? 0);
+                        const taskRectX = taskRects[i].getBBox().x + VisualClass.RectRound;
+                        const taskRectY = taskRects[i].getBBox().y;
+
+                        if (text) {
+                            expect(taskResourcesX.toFixed(2)).toBeCloseTo(taskRectX.toFixed(2), 1);
+                            expect(taskResourcesY.toFixed(2)).toBeLessThan(taskRectY.toFixed(2));
+                        }
+                    });
+
+                    done();
+                });
+            });
+
+            it("fullText", (done) => {
+                dataView.metadata.objects = {
+                    taskResource: {
+                        fullText: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskResources.forEach(e => {
+                        expect(e).toBeDefined();
+                        expect(e!.textContent!.indexOf("...")).toEqual(-1);
+                    });
+
+                    done();
+                });
+            });
+
+            it("widthByTask", (done) => {
+                dataView.metadata.objects = {
+                    taskResource: {
+                        position: ResourceLabelPosition.Top,
+                        fullText: false,
+                        widthByTask: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskRects = visualBuilder.taskRect;
+                    visualBuilder.taskResources.forEach((e, i) => {
+                        expect(taskRects[i]).toBeDefined();
+                        const labelElRawWidth: string = e.style.width;
+                        const labelElWidth: number = +labelElRawWidth.substring(0, labelElRawWidth.length - 2);
+
+                        const taskElRawWidth: string = taskRects[i]!.style.width ?? "0";
+                        const taskElWidth: number = +taskElRawWidth.substring(0, taskElRawWidth.length - 2);
+
+                        expect(labelElWidth <= taskElWidth).toBeTruthy();
+                    });
+
+                    done();
+                });
+            });
+        });
+
+        // describe("Task Completion", () => {
+        //     it("opacity", (done) => {
+        //         dataView.metadata.objects = {
+        //             taskCompletion: {
+        //                 show: true
+        //             }
+        //         };
+
+        //         visualBuilder.updateRenderTimeout(dataView, () => {
+        //             debugger;
+        //             visualBuilder.taskProgress.forEach(e => {
+        //                 expect(e.style.opacity).toBe(VisualClass["TaskOpacity"].toString());
+        //             });
+
+        //             let tasks = d3Select(visualBuilder.element).selectAll(".task").data() as Task[];
+        //             visualBuilder.taskRect.forEach((e, i) => {
+        //                 // if completion is null (no info about completion) - task expected to be completed
+        //                 const expectedOpacity = tasks[i].completion ? VisualClass["NotCompletedTaskOpacity"].toString() : VisualClass["TaskOpacity"].toString();
+        //                 expect(e.style.opacity).toBe(expectedOpacity);
+        //             });
+
+        //             done();
+        //         });
+        //     });
+        // });
+
+        describe("check duration unit downgrade", () => {
+            it("check for days downgrading", () => {
+                let unitMocks = VisualBuilder.getDowngradeDurationUnitMocks(),
+                    data = unitMocks.days.data,
+                    expected = unitMocks.days.expected,
+                    realResult = data.map((dataItem) => DurationHelper.getNewUnitByFloorDuration(dataItem.unit, dataItem.duration));
+
+                expect(realResult).toEqual(expected);
+            });
+
+            it("check for hours downgrading", () => {
+                let unitMocks = VisualBuilder.getDowngradeDurationUnitMocks(),
+                    data = unitMocks.hours.data,
+                    expected = unitMocks.hours.expected,
+                    realResult = data.map((dataItem) => DurationHelper.getNewUnitByFloorDuration(dataItem.unit, dataItem.duration));
+
+                expect(realResult).toEqual(expected);
+            });
+
+            it("check for minutes downgrading", () => {
+                let unitMocks = VisualBuilder.getDowngradeDurationUnitMocks(),
+                    data = unitMocks.minutes.data,
+                    expected = unitMocks.minutes.expected,
+                    realResult = data.map((dataItem) => DurationHelper.getNewUnitByFloorDuration(dataItem.unit, dataItem.duration));
+
+                expect(realResult).toEqual(expected);
+            });
+
+            it("check for hours downgrading", () => {
+                let unitMocks = VisualBuilder.getDowngradeDurationUnitMocks(),
+                    data = unitMocks.seconds.data,
+                    expected = unitMocks.seconds.expected,
+                    realResult = data.map((dataItem) => DurationHelper.getNewUnitByFloorDuration(dataItem.unit, dataItem.duration));
+
+                expect(realResult).toEqual(expected);
+            });
+        });
+
+        describe("Task Settings", () => {
+            it("color", (done) => {
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration,
+                    VisualData.ColumnResource]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                let color: string = getRandomHexColor();
+                const parsedColor = parseColorString(color);
+                const darkenedColor = darken(parsedColor, 50);
+                const rgbStr = rgbString(darkenedColor);
+
+                dataView.metadata.objects = {
+                    taskConfig: {
+                        fill: VisualBuilder.getSolidColorStructuralObject(color)
+                    }
+                };
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskRect.forEach(e => {
+                        expect(e).toBeTruthy();
+                        assertColorsMatch(e!.style.stroke, rgbStr);
+                    });
+
+                    done();
+                });
+            });
+
+            it("height", (done) => {
+                const height: number = 50;
+                dataView.metadata.objects = {
+                    taskConfig: {
+                        height
+                    }
+                };
+
+                const expectedHeight: number = height / Gantt.ChartLineProportion;
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskRect
+                        // collapsed parent tasks are not rendered so we need to filter them
+                        .filter((rect) => rect!.getAttribute("tabindex") === "0")
+                        .forEach((taskRect) => {
+                            expect(taskRect).toBeTruthy()
+                            const rectHeight = taskRect?.getBBox().height;
+                            expect(rectHeight).toBeCloseTo(expectedHeight, 1);
+                        });
+
+                    done();
+                });
+            });
+        });
+
+        describe("Category Labels", () => {
+            beforeEach(() => {
+                dataView.metadata.objects = {
+                    taskLabels: {
+                        show: true
+                    }
+                };
+
+            });
+
+            it("show", (done) => {
+                dataView.metadata.objects = {
+                    taskLabels: {
+                        show: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskLabelsWidth: number = 110;
+                    expect(visualBuilder.taskLabels).toBeTruthy();
+                    expect(visualBuilder.taskLineRect).not.toBeNull();
+                    expect(visualBuilder.taskLineRect!.getAttribute("width")).toEqual(taskLabelsWidth.toString());
+                    done();
+                });
+            });
+
+            it("hide", (done) => {
+                dataView.metadata.objects = {
+                    taskLabels: {
+                        show: false
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    expect(visualBuilder.taskLabels.length).toEqual(0);
+                    expect(visualBuilder.taskLineRect).not.toBeNull();
+                    expect(visualBuilder.taskLineRect!.getAttribute("width")).toEqual("0");
+                    done();
+                });
+            });
+
+            it("color", (done) => {
+                let color: string = getRandomHexColor();
+                dataView.metadata.objects = {
+                    taskLabels: {
+                        fill: VisualBuilder.getSolidColorStructuralObject(color)
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    visualBuilder.taskLabelsText.forEach(e => {
+                        const fill = e.getAttribute("fill");
+                        expect(fill).not.toBeNull();
+                        assertColorsMatch(fill!, color);
+                    });
+
+                    done();
+                });
+            });
+        });
+
+        describe("Legend", () => {
+            beforeEach(() => {
+                dataView.metadata.objects = {
+                    legend: {
+                        show: true,
+                        position: LegendPosition.right
+                    }
+                };
+            });
+
+            it("show", (done) => {
+                dataView.metadata.objects = {
+                    legend: {
+                        show: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    expect(visualBuilder.legendGroup).not.toBeNull();
+                    expect(visualBuilder.legendGroup!.children.length).not.toEqual(0);
+
+                    done();
+                });
+            });
+
+            it("hide", (done) => {
+                dataView.metadata.objects = {
+                    legend: {
+                        show: false
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    expect(visualBuilder.legendGroup).not.toBeNull();
+                    expect(visualBuilder.legendGroup!.children.length).toEqual(0);
+                    done();
+                });
+            });
+        });
+
+        describe("Gantt date types", () => {
+            it("Show today line", (done) => {
+                dataView.metadata.objects = {
+                    dateType: {
+                        showTodayLine: true
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const todayLine = visualBuilder.chartLine;
+                    todayLine.forEach(el => {
+                        expect(el.style.display).not.toBe("none");
+                    });
+                    done();
+                });
+            });
+
+            it("Hide today line when showTodayLine is false", (done) => {
+                dataView.metadata.objects = {
+                    dateType: {
+                        showTodayLine: false
+                    }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const todayLine = visualBuilder.chartLine;
+                    todayLine.forEach(el => {
+                        expect(el.style.display).toBe("none");
+                    })
+                    done();
+                });
+            });
+
+            it("Today color", (done) => {
+                let color: string = getRandomHexColor();
+                dataView.metadata.objects = {
+                    dateType: {
+                        todayColor: VisualBuilder.getSolidColorStructuralObject(color)
+                    }
+                };
+
+                checkColor(visualBuilder.chartLine, color, "stroke", done);
+            });
+
+            it("Axis color", (done) => {
+                let color: string = getRandomHexColor();
+                dataView.metadata.objects = {
+                    dateType: {
+                        axisColor: VisualBuilder.getSolidColorStructuralObject(color)
+                    }
+                };
+
+                checkColor(visualBuilder.axisTicksLine, color, "stroke", done);
+            });
+
+            it("Axis text color", (done) => {
+                let color: string = getRandomHexColor();
+                dataView.metadata.objects = {
+                    dateType: {
+                        axisTextColor: VisualBuilder.getSolidColorStructuralObject(color)
+                    }
+                };
+
+                checkColor(visualBuilder.axisTicksText, color, "fill", done);
+            });
+
+            function checkColor(
+                elements: HTMLElement[] | SVGElement[],
+                color: string,
+                cssStyle: string,
+                done: () => void
+            ): void {
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    elements.forEach((e: SVGElement | HTMLElement) =>
+                        assertColorsMatch(e.style.getPropertyValue(cssStyle), color));
+
+                    done();
+                });
+            }
+        });
+    });
+
+    describe("View Model tests", () => {
+        it("Test result from enumeration", (done) => {
+            const fontSize: number = 14;
+
+            dataView.metadata.objects = {
+                taskResource: {
+                    show: true,
+                    fill: { solid: { color: "#A3A3A3" } },
+                    fontSize
+                }
+            };
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                const taskResources = visualBuilder.taskResources;
+                taskResources.forEach(resource => {
+                    expect(resource).toBeDefined();
+                    expect(resource.getAttribute("x")).not.toBeNaN();
+                    expect(resource.getAttribute("y")).not.toBeNaN();
+                    expect(resource.style.fill).toBe("rgb(163, 163, 163)");
+
+                    let fontSizeEl: string = resource.style.fontSize;
+                    fontSizeEl = fontSizeEl.substring(0, fontSizeEl.length - 2);
+
+                    let fontSizePoint: string = PixelConverter.fromPoint(fontSize);
+                    fontSizePoint = (+(fontSizePoint.substring(0, fontSizePoint.length - 2))).toFixed(4);
+
+                    expect(fontSizeEl).toEqual(fontSizePoint);
+                });
+                done();
+            });
+        });
+    });
+
+    describe("Capabilities tests", () => {
+        it("all items having displayName should have displayNameKey property", () => {
+            const jsonData = require("../capabilities.json");
+
+            let objectsChecker: Function = (obj: any) => {
+                for (let property in obj) {
+                    let value: any = obj[property];
+
+                    if (value.displayName) {
+                        expect(value.displayNameKey).toBeDefined();
+                    }
+
+                    if (typeof value === "object") {
+                        objectsChecker(value);
+                    }
+                }
+            };
+
+            objectsChecker(jsonData);
+        });
+    });
+
+    describe("High contrast mode", () => {
+        const backgroundColor: string = "#000000";
+        const foregroundColor: string = "#ff00ff";
+
+        let taskRect: (SVGPathElement | null)[],
+            taskLineRect: SVGRectElement | null,
+            axisTicksText: SVGElement[],
+            axisTicksLine: SVGElement[],
+            taskLabels: SVGGElement[],
+            chartLine: SVGLineElement[],
+            taskProgress: SVGLinearGradientElement[];
+
+        beforeEach(() => {
+            visualBuilder.visualHost.colorPalette.isHighContrast = true;
+
+            visualBuilder.visualHost.colorPalette.background = { value: backgroundColor };
+            visualBuilder.visualHost.colorPalette.foreground = { value: foregroundColor };
+
+            taskRect = visualBuilder.taskRect;
+            taskProgress = visualBuilder.taskProgress;
+            taskLineRect = visualBuilder.taskLineRect;
+
+            axisTicksLine = visualBuilder.axisTicksLine;
+            axisTicksText = visualBuilder.axisTicksLine;
+            taskLabels = visualBuilder.taskLabels;
+            chartLine = visualBuilder.chartLine;
+        });
+
+        it("should use high contrast mode colors", (done) => {
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                expect(isColorAppliedToElements(chartLine, foregroundColor, "fill"));
+                expect(isColorAppliedToElements(axisTicksLine, foregroundColor, "stroke"));
+                expect(isColorAppliedToElements(axisTicksText, foregroundColor, "fill"));
+                expect(isColorAppliedToElements(taskProgress, foregroundColor, "fill"));
+                expect(isColorAppliedToElements(taskLabels, foregroundColor, "fill"));
+                done();
+            });
+        });
+
+        it("axis color and categories background should be taken from theme color", (done) => {
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                expect(taskLineRect).not.toBeNull();
+                expect(isColorAppliedToElements([taskLineRect!], backgroundColor, "fill"));
+                done();
+            });
+        });
+
+        it("should not use fill for task rects", (done) => {
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                expect(taskRect).not.toBeNull();
+                expect(isColorAppliedToElements(taskRect!, undefined, "fill"));
+                expect(isColorAppliedToElements(taskRect!, foregroundColor, "stroke"));
+                expect(isColorAppliedToElements(taskRect!, backgroundColor, "fill"));
+                done();
+            });
+        });
+    });
+
+    describe("IsDateValid test", () => {
+        it("test for valid Date", () => {
+            let validDate = new Date();
+            expect(isValidDate(validDate)).toBeTruthy();
+
+            validDate = new Date(13425);
+            expect(isValidDate(validDate)).toBeTruthy();
+        });
+
+        it("test for invalid Date", () => {
+            const validDate = new Date("Hello");
+            expect(isValidDate(validDate)).toBeFalsy();
+        });
+    });
+
+    describe("Highlight test", () => {
+        const defaultOpacity: string = DefaultOpacity.toString();
+        const dimmedOpacity: string = DimmedOpacity.toString();
+
+        it("Highlights property should not be received", (done) => {
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                expect(dataView.categorical?.values?.some(value => value.highlights != null && value.highlights.length > 0)).toBe(false);
+
+                const tasks = visualBuilder.tasks;
+
+                tasks.forEach((task: SVGGElement) => {
+                    expect(task.style.opacity).toBe(defaultOpacity);
+                });
+
+                done();
+            });
+        });
+
+        it("Elements should be highlighted", (done) => {
+            const dataViewWithHighLighted: DataView = defaultDataViewBuilder.getDataViewWithHighlights();
+            visualBuilder.updateRenderTimeout(dataViewWithHighLighted, () => {
+                expect(dataViewWithHighLighted.categorical?.values?.some(value => value.highlights != null && value.highlights.length > 0)).toBe(true);
+
+                let highlightedCount: number = 0;
+                let nonHighlightedCount: number = 0;
+                const expectedHighlightedCount: number = 1;
+
+                const tasks = visualBuilder.tasks;
+
+                tasks.forEach((task: SVGGElement) => {
+                    const opacity: string = task?.style?.opacity;
+                    if (opacity === defaultOpacity)
+                        highlightedCount++;
+                    if (opacity === dimmedOpacity)
+                        nonHighlightedCount++;
+                });
+
+                const expectedNonHighlightedCount: number = tasks.length - expectedHighlightedCount;
+                expect(highlightedCount).toBe(expectedHighlightedCount);
+                expect(nonHighlightedCount).toBe(expectedNonHighlightedCount);
+
+                done();
+            });
+        });
+    });
+
+    describe("PersistProperties test", () => {
+
+        const collapsedTasksUpdateIDs = "collapsedTasksUpdateIDs";
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const getVisualBuilderInstance = () => visualBuilder.instance as any;
+
+        it("Synchronous one task", (done) => {
+            const newId = crypto?.randomUUID() || Math.random().toString();
+
+            getVisualBuilderInstance()[collapsedTasksUpdateIDs] = [newId];
+
+            dataView.metadata.objects = {
+                collapsedTasksUpdateId: {
+                    value: newId
+                }
+            };
+
+            visualBuilder.updateRenderTimeout(dataView, () => {
+                expect(getVisualBuilderInstance()[collapsedTasksUpdateIDs].length).toBe(0);
+                done();
+            });
+        });
+
+        it("Synchronous multiple tasks", (done) => {
+            const collapsedTasksUpdateIDsRandom: string[] = [];
+
+            for (let count = 0; count < 3; count++) {
+                const newId = crypto?.randomUUID() || Math.random().toString();
+                collapsedTasksUpdateIDsRandom.push(newId);
+            }
+
+            getVisualBuilderInstance()[collapsedTasksUpdateIDs] = collapsedTasksUpdateIDsRandom;
+
+            const objects1 = {
+                collapsedTasksUpdateId: {
+                    value: collapsedTasksUpdateIDsRandom[0]
+                }
+            };
+
+            const objects2 = {
+                collapsedTasksUpdateId: {
+                    value: collapsedTasksUpdateIDsRandom[1]
+                }
+            };
+
+            const objects3 = {
+                collapsedTasksUpdateId: {
+                    value: collapsedTasksUpdateIDsRandom[2]
+                }
+            };
+
+
+            dataView.metadata.objects = objects1;
+            visualBuilder.update(dataView);
+            expect(getVisualBuilderInstance()[collapsedTasksUpdateIDs].length).toBe(2);
+
+
+            dataView.metadata.objects = objects2;
+            visualBuilder.update(dataView);
+            expect(getVisualBuilderInstance()[collapsedTasksUpdateIDs].length).toBe(1);
+
+
+            dataView.metadata.objects = objects3;
+            visualBuilder.update(dataView);
+            expect(getVisualBuilderInstance()[collapsedTasksUpdateIDs].length).toBe(0);
+
+            done();
+        });
+
+        it("Asynchronous multiple tasks", async () => {
+            const collapsedTasksUpdateIDsRandom: string[] = []
+
+            for (let count = 0; count < 3; count++) {
+                const newId = crypto?.randomUUID() || Math.random().toString();
+                collapsedTasksUpdateIDsRandom.push(newId);
+            }
+
+            getVisualBuilderInstance()[collapsedTasksUpdateIDs] = collapsedTasksUpdateIDsRandom;
+
+            const objects1 = {
+                collapsedTasksUpdateId: {
+                    value: collapsedTasksUpdateIDsRandom[0]
+                }
+            };
+
+            const objects2 = {
+                collapsedTasksUpdateId: {
+                    value: collapsedTasksUpdateIDsRandom[1]
+                }
+            };
+
+            const objects3 = {
+                collapsedTasksUpdateId: {
+                    value: collapsedTasksUpdateIDsRandom[2]
+                }
+            };
+
+
+            const promise1 = new Promise((resolve) => {
+                setTimeout(() => {
+                    dataView.metadata.objects = objects1;
+                    visualBuilder.update(dataView);
+                    resolve(getVisualBuilderInstance()[collapsedTasksUpdateIDs].includes(collapsedTasksUpdateIDsRandom[0]));
+                },
+                    1_000);
+            });
+
+            const promise2 = new Promise((resolve) => {
+                setTimeout(() => {
+                    dataView.metadata.objects = objects2;
+                    visualBuilder.update(dataView);
+                    resolve(getVisualBuilderInstance()[collapsedTasksUpdateIDs].includes(collapsedTasksUpdateIDsRandom[1]));
+                },
+                    2_000);
+            });
+
+            const promise3 = new Promise((resolve) => {
+                setTimeout(() => {
+                    dataView.metadata.objects = objects3;
+                    visualBuilder.update(dataView);
+                    resolve(getVisualBuilderInstance()[collapsedTasksUpdateIDs].includes(collapsedTasksUpdateIDsRandom[2]));
+                },
+                    3_000);
+            });
+
+            const result = await Promise.all([promise1, promise2, promise3]);
+
+            expect(result.filter(result => result === true).length).toBe(0);
+        });
+    });
+
+    describe("Task sorting test", () => {
+        let visualBuilder: VisualBuilder;
+        let defaultDataViewBuilder: VisualData;
+        let dataView: DataView;
+
+        const sortedTaskNamesAsc = [
+            "Task 1",
+            "Task 2",
+            "Task 3",
+            "Task 4",
+            "Task 10",
+            "Task 20",
+            "Task 30",
+            "Task 40",
+            "Task 50",
+            "Task 60",
+            "Task A",
+            "Task B",
+            "Task Z"
+        ];
+
+        beforeEach(() => {
+            visualBuilder = new VisualBuilder(1000, 500);
+            defaultDataViewBuilder = new VisualData();
+            defaultDataViewBuilder.valuesTaskTypeResource = [
+                ["Spec", "Task 1", "Mey"],
+                ["Dev", "Task 10", "Sheng"],
+                ["", "Task 2", "ConnectionWithChildren"],
+                ["", "Task 3", "ConnectionWithChildren"],
+                ["Spec", "Task 20", "Mini"],
+                ["Dev", "Task 4", "Shay"],
+                ["Dev", "Task Z", "Ehren"],
+                ["Dev", "Task 30", "James"],
+                ["Dev", "Task 40", "Matt"],
+                ["Design", "Task 50", "John"],
+                ["Dev", "Task 60", "JohnV"],
+                ["Dev", "Task 10", "John"],
+                ["Dev", "Task A", "Gentiana"],
+                ["Dev", "Task 2"],
+                ["Spec", "Task 3"],
+                ["Spec", "Task 20", "Min"],
+                ["Dev", "Task 4", "Sean"],
+                ["Dev", "Task Z", "Iri"],
+                ["Dev", "Task 30", "Jimmy"],
+                ["Dev", "Task 40", "Tom"],
+                ["Dev", "Task B", "John"],
+                ["Spec", "Task 20", "Mall"],
+                ["Dev", "Task 4", "Sou"],
+                ["Dev", "Task 30", "Jamie"],
+                ["Dev", "Task 40", "Last Name"]
+            ];
+            dataView = defaultDataViewBuilder.getDataView();
+            fixDataViewDateValuesAggregation(dataView);
+        });
+
+        describe("Custom sorting with sortingOptions", () => {
+            it("Should sort tasks in ascending order when custom sorting is enabled", (done) => {
+                // Create tasks with specific names that can be sorted
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration
+                ]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                // Enable custom sorting in ascending order
+                dataView.metadata.columns[0].sort = SortDirection.Ascending;
+
+                dataView.metadata.objects = {
+                    general: { groupTasks: true }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskNames = visualBuilder.taskLabelTextContent;
+
+                    // Verify tasks are sorted: Task 1, Task 2, Task 3, Task 4, Task 5, Task 10, Task 20, Task 30, Task 40, Task 50
+                    for (let i = 0; i < sortedTaskNamesAsc.length; i++) {
+                        expect(taskNames[i]).toBe(sortedTaskNamesAsc[i]);
+                    }
+                    done();
+                });
+            });
+
+            it("Should sort tasks in descending order when custom sorting is enabled", (done) => {
+                const sortedTaskNamesDesc = [...sortedTaskNamesAsc].reverse();
+
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration
+                ]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                // Enable custom sorting in descending order
+                dataView.metadata.columns[0].sort = SortDirection.Descending;
+
+                dataView.metadata.objects = {
+                    general: { groupTasks: true }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskNames = visualBuilder.taskLabelTextContent;
+
+                    // Verify tasks are sorted in descending order
+                    for (let i = 0; i < sortedTaskNamesDesc.length; i++) {
+                        expect(taskNames[i]).toBe(sortedTaskNamesDesc[i]);
+                    }
+                    done();
+                });
+            });
+
+            it("Should not apply custom sorting when sortingOptions.isCustomSortingNeeded is false", (done) => {
+
+                const finalResultTaskNames = Array.from(new Set(defaultDataViewBuilder.valuesTaskTypeResource.map(item => item[1])));
+
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration
+                ]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                // No sort property means no custom sorting
+                dataView.metadata.columns[0].sort = undefined;
+
+                dataView.metadata.objects = {
+                    general: { groupTasks: true }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskNames = visualBuilder.taskLabelTextContent;
+
+                    // Tasks should maintain their original order or default sorting
+                    for (let i = 0; i < finalResultTaskNames.length; i++) {
+                        expect(taskNames[i]).toBe(finalResultTaskNames[i]);
+                    }
+                    done();
+                });
+            });
+
+        });
+
+        describe("sortTasksForLayering", () => {
+            describe("null start date handling", () => {
+                it("should push tasks with null start dates to the end", () => {
+                    const task1: Task = {
+                        name: "Task 1",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const task2: Task = {
+                        name: "Task 2",
+                        start: null as any,
+                        end: new Date("2024-01-15"),
+                        duration: 5,
+                    } as Task;
+
+                    const task3: Task = {
+                        name: "Task 3",
+                        start: new Date("2024-01-15"),
+                        end: new Date("2024-01-20"),
+                        duration: 5,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [task2, task3, task1]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    expect(groupedTasks["group1"][0].name).toBe("Task 1");
+                    expect(groupedTasks["group1"][1].name).toBe("Task 3");
+                    expect(groupedTasks["group1"][2].name).toBe("Task 2");
+                });
+
+                it("should treat tasks with both null start dates as equal", () => {
+                    const task1: Task = {
+                        name: "Task 1",
+                        start: null as any,
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const task2: Task = {
+                        name: "Task 2",
+                        start: null as any,
+                        end: new Date("2024-01-10"),
+                        duration: 5,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [task1, task2]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    // Order should remain unchanged when both are null
+                    expect(groupedTasks["group1"][0].name).toBe("Task 1");
+                    expect(groupedTasks["group1"][1].name).toBe("Task 2");
+                });
+            });
+
+            describe("start date sorting", () => {
+                it("should sort tasks by start date in ascending order", () => {
+                    const task1: Task = {
+                        name: "Task 1",
+                        start: new Date("2024-01-15"),
+                        end: new Date("2024-01-20"),
+                        duration: 5,
+                    } as Task;
+
+                    const task2: Task = {
+                        name: "Task 2",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const task3: Task = {
+                        name: "Task 3",
+                        start: new Date("2024-01-10"),
+                        end: new Date("2024-01-15"),
+                        duration: 5,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [task1, task2, task3]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    expect(groupedTasks["group1"][0].name).toBe("Task 2");
+                    expect(groupedTasks["group1"][1].name).toBe("Task 3");
+                    expect(groupedTasks["group1"][2].name).toBe("Task 1");
+                });
+            });
+
+            describe("end date sorting when start dates are equal", () => {
+                it("should sort by end date descending (longer tasks first) when start dates are equal", () => {
+                    const task1: Task = {
+                        name: "Task 1 (short)",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-03"),
+                        duration: 2,
+                    } as Task;
+
+                    const task2: Task = {
+                        name: "Task 2 (long)",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-10"),
+                        duration: 9,
+                    } as Task;
+
+                    const task3: Task = {
+                        name: "Task 3 (medium)",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 4,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [task1, task2, task3]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    expect(groupedTasks["group1"][0].name).toBe("Task 2 (long)");
+                    expect(groupedTasks["group1"][1].name).toBe("Task 3 (medium)");
+                    expect(groupedTasks["group1"][2].name).toBe("Task 1 (short)");
+                });
+
+                it("should push tasks with null end dates to the end when start dates are equal", () => {
+                    const task1: Task = {
+                        name: "Task 1",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const task2: Task = {
+                        name: "Task 2",
+                        start: new Date("2024-01-01"),
+                        end: null as any,
+                        duration: 5,
+                    } as Task;
+
+                    const task3: Task = {
+                        name: "Task 3",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-10"),
+                        duration: 10,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [task2, task1, task3]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    expect(groupedTasks["group1"][0].name).toBe("Task 3");
+                    expect(groupedTasks["group1"][1].name).toBe("Task 1");
+                    expect(groupedTasks["group1"][2].name).toBe("Task 2");
+                });
+
+                it("should treat tasks with both null end dates as equal when start dates are equal", () => {
+                    const task1: Task = {
+                        name: "Task 1",
+                        start: new Date("2024-01-01"),
+                        end: null as any,
+                        duration: 5,
+                    } as Task;
+
+                    const task2: Task = {
+                        name: "Task 2",
+                        start: new Date("2024-01-01"),
+                        end: null as any,
+                        duration: 5,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [task1, task2]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    // Order should remain unchanged when both are null
+                    expect(groupedTasks["group1"][0].name).toBe("Task 1");
+                    expect(groupedTasks["group1"][1].name).toBe("Task 2");
+                });
+            });
+
+            describe("complex sorting scenarios", () => {
+                it("should handle mixed null and non-null dates correctly", () => {
+                    const task1: Task = {
+                        name: "Task 1 (null start)",
+                        start: null as any,
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const task2: Task = {
+                        name: "Task 2 (early)",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-03"),
+                        duration: 2,
+                    } as Task;
+
+                    const task3: Task = {
+                        name: "Task 3 (late, long)",
+                        start: new Date("2024-01-10"),
+                        end: new Date("2024-01-20"),
+                        duration: 10,
+                    } as Task;
+
+                    const task4: Task = {
+                        name: "Task 4 (same as 2, longer)",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-10"),
+                        duration: 9,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [task1, task3, task2, task4]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    expect(groupedTasks["group1"][0].name).toBe("Task 4 (same as 2, longer)");
+                    expect(groupedTasks["group1"][1].name).toBe("Task 2 (early)");
+                    expect(groupedTasks["group1"][2].name).toBe("Task 3 (late, long)");
+                    expect(groupedTasks["group1"][3].name).toBe("Task 1 (null start)");
+                });
+            });
+
+            describe("children sorting", () => {
+                it("should sort children tasks when parent has children", () => {
+                    const child1: Task = {
+                        name: "Child 1",
+                        start: new Date("2024-01-15"),
+                        end: new Date("2024-01-20"),
+                        duration: 5,
+                    } as Task;
+
+                    const child2: Task = {
+                        name: "Child 2",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const parent: Task = {
+                        name: "Parent",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-20"),
+                        duration: 20,
+                        children: [child1, child2],
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [parent]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    expect(parent.children[0].name).toBe("Child 2");
+                    expect(parent.children[1].name).toBe("Child 1");
+                });
+
+                it("should not sort parent array when it has children", () => {
+                    const child1: Task = {
+                        name: "Child 1",
+                        start: new Date("2024-01-15"),
+                        end: new Date("2024-01-20"),
+                        duration: 5,
+                    } as Task;
+
+                    const parent1: Task = {
+                        name: "Parent 1",
+                        start: new Date("2024-01-10"),
+                        end: new Date("2024-01-20"),
+                        duration: 10,
+                        children: [child1],
+                    } as Task;
+
+                    const parent2: Task = {
+                        name: "Parent 2",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                        children: [] as any,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [parent1, parent2]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    // Parent order should remain unchanged when first task has children
+                    expect(groupedTasks["group1"][0].name).toBe("Parent 1");
+                    expect(groupedTasks["group1"][1].name).toBe("Parent 2");
+                });
+            });
+
+            describe("multiple groups", () => {
+                it("should sort tasks in multiple groups independently", () => {
+                    const group1Task1: Task = {
+                        name: "G1 Task 1",
+                        start: new Date("2024-01-15"),
+                        end: new Date("2024-01-20"),
+                        duration: 5,
+                    } as Task;
+
+                    const group1Task2: Task = {
+                        name: "G1 Task 2",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const group2Task1: Task = {
+                        name: "G2 Task 1",
+                        start: new Date("2024-02-15"),
+                        end: new Date("2024-02-20"),
+                        duration: 5,
+                    } as Task;
+
+                    const group2Task2: Task = {
+                        name: "G2 Task 2",
+                        start: new Date("2024-02-01"),
+                        end: new Date("2024-02-05"),
+                        duration: 5,
+                    } as Task;
+
+                    const groupedTasks = {
+                        "group1": [group1Task1, group1Task2],
+                        "group2": [group2Task1, group2Task2]
+                    };
+
+                    Gantt.sortTasksForLayering(groupedTasks);
+
+                    expect(groupedTasks["group1"][0].name).toBe("G1 Task 2");
+                    expect(groupedTasks["group1"][1].name).toBe("G1 Task 1");
+                    expect(groupedTasks["group2"][0].name).toBe("G2 Task 2");
+                    expect(groupedTasks["group2"][1].name).toBe("G2 Task 1");
+                });
+            });
+
+            describe("isCustomSortingNeeded parameter", () => {
+                it("should NOT re-sort children when isCustomSortingNeeded is true", () => {
+                    const child1: Task = {
+                        name: "Zebra",
+                        start: new Date("2024-01-10"),
+                        end: new Date("2024-01-15"),
+                        duration: 5,
+                        parent: "Parent1",
+                    } as Task;
+
+                    const child2: Task = {
+                        name: "Apple",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                        parent: "Parent1",
+                    } as Task;
+
+                    const parentTask: Task = {
+                        name: "Parent1",
+                        start: null,
+                        end: null,
+                        duration: null,
+                        parent: null,
+                        children: [child1, child2],
+                    } as Task;
+
+                    const groupedTasks = {
+                        "Parent1": [parentTask]
+                    };
+
+                    // With isCustomSortingNeeded=true, children order should be preserved
+                    Gantt.sortTasksForLayering(groupedTasks, true);
+
+                    expect(parentTask.children[0].name).toBe("Zebra");
+                    expect(parentTask.children[1].name).toBe("Apple");
+                });
+
+                it("should re-sort children by start date when isCustomSortingNeeded is false", () => {
+                    const child1: Task = {
+                        name: "Zebra",
+                        start: new Date("2024-01-10"),
+                        end: new Date("2024-01-15"),
+                        duration: 5,
+                        parent: "Parent1",
+                    } as Task;
+
+                    const child2: Task = {
+                        name: "Apple",
+                        start: new Date("2024-01-01"),
+                        end: new Date("2024-01-05"),
+                        duration: 5,
+                        parent: "Parent1",
+                    } as Task;
+
+                    const parentTask: Task = {
+                        name: "Parent1",
+                        start: null,
+                        end: null,
+                        duration: null,
+                        parent: null,
+                        children: [child1, child2],
+                    } as Task;
+
+                    const groupedTasks = {
+                        "Parent1": [parentTask]
+                    };
+
+                    // With isCustomSortingNeeded=false (default), children should be sorted by start date
+                    Gantt.sortTasksForLayering(groupedTasks, false);
+
+                    expect(parentTask.children[0].name).toBe("Apple");
+                    expect(parentTask.children[1].name).toBe("Zebra");
+                });
+            });
+        });
+
+        describe("Parent-child ordering with explicit sort direction", () => {
+            it("should keep parent before children when sorting descending", (done) => {
+                visualBuilder = new VisualBuilder(1000, 500);
+                defaultDataViewBuilder = new VisualData();
+                defaultDataViewBuilder.valuesTaskTypeResource = [
+                    ["Dev", "Alpha", "R1", "Roof"],
+                    ["Dev", "Beta", "R2", "Roof"],
+                    ["Dev", "Gamma", "R3", "Roof"],
+                    ["Dev", "Delta", "R4", "Walls"],
+                    ["Dev", "Epsilon", "R5", "Walls"],
+                ];
+                defaultDataViewBuilder.valuesStartDate = [
+                    new Date("2024-01-01"),
+                    new Date("2024-01-05"),
+                    new Date("2024-01-10"),
+                    new Date("2024-02-01"),
+                    new Date("2024-02-05"),
+                ];
+                defaultDataViewBuilder.valuesDuration = [5, 5, 5, 5, 5];
+                defaultDataViewBuilder.valuesCompletePrecntege = [0.5, 0.5, 0.5, 0.5, 0.5];
+                defaultDataViewBuilder.valuesExtraInformation = ["d1", "d2", "d3", "d4", "d5"];
+                defaultDataViewBuilder.valuesExtraInformationDates = [
+                    new Date("2024-01-01"),
+                    new Date("2024-01-05"),
+                    new Date("2024-01-10"),
+                    new Date("2024-02-01"),
+                    new Date("2024-02-05"),
+                ];
+
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration,
+                    VisualData.ColumnParent,
+                ]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                // Descending sort
+                dataView.metadata.columns.find(c => c.roles["Task"]).sort = SortDirection.Descending;
+
+                dataView.metadata.objects = {
+                    general: { groupTasks: true }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskNames = visualBuilder.taskLabelTextContent;
+
+                    // In descending order: Walls before Roof, but each parent must come before its children
+                    const wallsIndex = taskNames.indexOf("Walls");
+                    const roofIndex = taskNames.indexOf("Roof");
+
+                    // Parents should exist
+                    expect(wallsIndex).toBeGreaterThanOrEqual(0);
+                    expect(roofIndex).toBeGreaterThanOrEqual(0);
+
+                    // Descending: Walls before Roof
+                    expect(wallsIndex).toBeLessThan(roofIndex);
+
+                    // Each child must come AFTER its parent
+                    const deltaIndex = taskNames.indexOf("Delta");
+                    const epsilonIndex = taskNames.indexOf("Epsilon");
+                    expect(deltaIndex).toBeGreaterThan(wallsIndex);
+                    expect(epsilonIndex).toBeGreaterThan(wallsIndex);
+
+                    const alphaIndex = taskNames.indexOf("Alpha");
+                    const betaIndex = taskNames.indexOf("Beta");
+                    const gammaIndex = taskNames.indexOf("Gamma");
+                    expect(alphaIndex).toBeGreaterThan(roofIndex);
+                    expect(betaIndex).toBeGreaterThan(roofIndex);
+                    expect(gammaIndex).toBeGreaterThan(roofIndex);
+
+                    done();
+                });
+            });
+
+            it("should keep parent before children when sorting ascending", (done) => {
+                visualBuilder = new VisualBuilder(1000, 500);
+                defaultDataViewBuilder = new VisualData();
+                defaultDataViewBuilder.valuesTaskTypeResource = [
+                    ["Dev", "Alpha", "R1", "Roof"],
+                    ["Dev", "Beta", "R2", "Roof"],
+                    ["Dev", "Gamma", "R3", "Roof"],
+                    ["Dev", "Delta", "R4", "Walls"],
+                    ["Dev", "Epsilon", "R5", "Walls"],
+                ];
+                defaultDataViewBuilder.valuesStartDate = [
+                    new Date("2024-01-01"),
+                    new Date("2024-01-05"),
+                    new Date("2024-01-10"),
+                    new Date("2024-02-01"),
+                    new Date("2024-02-05"),
+                ];
+                defaultDataViewBuilder.valuesDuration = [5, 5, 5, 5, 5];
+                defaultDataViewBuilder.valuesCompletePrecntege = [0.5, 0.5, 0.5, 0.5, 0.5];
+                defaultDataViewBuilder.valuesExtraInformation = ["d1", "d2", "d3", "d4", "d5"];
+                defaultDataViewBuilder.valuesExtraInformationDates = [
+                    new Date("2024-01-01"),
+                    new Date("2024-01-05"),
+                    new Date("2024-01-10"),
+                    new Date("2024-02-01"),
+                    new Date("2024-02-05"),
+                ];
+
+                dataView = defaultDataViewBuilder.getDataView([
+                    VisualData.ColumnTask,
+                    VisualData.ColumnStartDate,
+                    VisualData.ColumnDuration,
+                    VisualData.ColumnParent,
+                ]);
+
+                fixDataViewDateValuesAggregation(dataView);
+
+                // Ascending sort
+                dataView.metadata.columns.find(c => c.roles["Task"]).sort = SortDirection.Ascending;
+
+                dataView.metadata.objects = {
+                    general: { groupTasks: true }
+                };
+
+                visualBuilder.updateRenderTimeout(dataView, () => {
+                    const taskNames = visualBuilder.taskLabelTextContent;
+
+                    // In ascending order: Roof before Walls
+                    const roofIndex = taskNames.indexOf("Roof");
+                    const wallsIndex = taskNames.indexOf("Walls");
+
+                    expect(roofIndex).toBeGreaterThanOrEqual(0);
+                    expect(wallsIndex).toBeGreaterThanOrEqual(0);
+                    expect(roofIndex).toBeLessThan(wallsIndex);
+
+                    // Each child must come AFTER its parent
+                    const alphaIndex = taskNames.indexOf("Alpha");
+                    const betaIndex = taskNames.indexOf("Beta");
+                    const gammaIndex = taskNames.indexOf("Gamma");
+                    expect(alphaIndex).toBeGreaterThan(roofIndex);
+                    expect(betaIndex).toBeGreaterThan(roofIndex);
+                    expect(gammaIndex).toBeGreaterThan(roofIndex);
+
+                    const deltaIndex = taskNames.indexOf("Delta");
+                    const epsilonIndex = taskNames.indexOf("Epsilon");
+                    expect(deltaIndex).toBeGreaterThan(wallsIndex);
+                    expect(epsilonIndex).toBeGreaterThan(wallsIndex);
+
+                    done();
+                });
+            });
+        });
+    });
+});

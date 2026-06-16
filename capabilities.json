@@ -1,0 +1,1008 @@
+{
+    "dataRoles": [
+        {
+            "name": "Legend",
+            "displayName": "Legend",
+            "displayNameKey": "Role_Legend",
+            "kind": "Grouping"
+        },
+        {
+            "name": "Task",
+            "displayName": "Task",
+            "displayNameKey": "Role_Task",
+            "kind": "Grouping"
+        },
+        {
+            "name": "Parent",
+            "displayName": "Parent",
+            "displayNameKey": "Role_Parent",
+            "kind": "Grouping"
+        },
+        {
+            "name": "StartDate",
+            "displayName": "Start Date",
+            "displayNameKey": "Role_StartDate",
+            "kind": "Grouping"
+        },
+        {
+            "name": "EndDate",
+            "displayName": "End Date",
+            "displayNameKey": "Role_EndDate",
+            "kind": "Measure"
+        },
+        {
+            "name": "Duration",
+            "displayName": "Duration",
+            "displayNameKey": "Role_Duration",
+            "kind": "Measure",
+            "requiredTypes": [
+                {
+                    "numeric": true
+                },
+                {
+                    "integer": true
+                }
+            ]
+        },
+        {
+            "name": "Completion",
+            "displayName": "% Completion",
+            "displayNameKey": "Role_Completion",
+            "kind": "Measure",
+            "requiredTypes": [
+                {
+                    "numeric": true
+                },
+                {
+                    "integer": true
+                }
+            ]
+        },
+        {
+            "name": "Resource",
+            "displayName": "Resource",
+            "displayNameKey": "Role_Resource",
+            "kind": "Grouping"
+        },
+        {
+            "name": "ExtraInformation",
+            "displayName": "Tooltips",
+            "displayNameKey": "Role_Tooltips",
+            "kind": "Grouping"
+        },
+        {
+            "name": "Milestones",
+            "displayName": "Milestones",
+            "displayNameKey": "Milestones",
+            "kind": "Grouping"
+        }
+    ],
+    "dataViewMappings": [
+        {
+            "conditions": [
+                {
+                    "Legend": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Task": {
+                        "min": 1,
+                        "max": 1
+                    },
+                    "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "StartDate": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "EndDate": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Duration": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "Completion": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "Resource": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "ExtraInformation": {
+                        "min": 0,
+                        "max": 3
+                    },
+                    "Milestones": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                {
+                    "Legend": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Task": {
+                        "min": 1,
+                        "max": 1
+                    },
+                    "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "StartDate": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "EndDate": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "Duration": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Completion": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "Resource": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "ExtraInformation": {
+                        "min": 0,
+                        "max": 3
+                    },
+                    "Milestones": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                {
+                    "Legend": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Task": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "StartDate": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "EndDate": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Duration": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "Completion": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Resource": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "ExtraInformation": {
+                        "min": 0,
+                        "max": 3
+                    },
+                    "Milestones": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                {
+                    "Legend": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Task": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "StartDate": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "EndDate": {
+                        "min": 0,
+                        "max": 0
+                    },
+                    "Duration": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Completion": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "Resource": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "ExtraInformation": {
+                        "min": 0,
+                        "max": 3
+                    },
+                    "Milestones": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            ],
+            "categorical": {
+                "categories": {
+                    "select": [
+                        {
+                            "for": {
+                                "in": "Task"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "Parent"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "StartDate"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "Resource"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "ExtraInformation"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "Milestones"
+                            }
+                        }
+                    ]
+                },
+                "values": {
+                    "group": {
+                        "by": "Legend",
+                        "select": [
+                            {
+                                "for": {
+                                    "in": "EndDate"
+                                }
+                            },
+                            {
+                                "for": {
+                                    "in": "Duration"
+                                }
+                            },
+                            {
+                                "for": {
+                                    "in": "Completion"
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    ],
+    "objects": {
+        "general": {
+            "properties": {
+                "groupTasks": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "displayTasks": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "displayGroupedTaskGridLines": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "scrollToCurrentTime": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "displayGridLines": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "durationUnit": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "durationMin": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "barsRoundedCorners": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "subTasks": {
+            "properties": {
+                "inheritParentLegend": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "parentDurationByChildren": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "parentCompletionByChildren": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "collapsedTasks": {
+            "properties": {
+                "list": {
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "collapsedTasksUpdateId": {
+            "properties": {
+                "value": {
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "daysOff": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "firstDayOfWeek": {
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "legend": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "position": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showTitle": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "titleText": {
+                    "type": {
+                        "text": true
+                    },
+                    "suppressFormatPainterCopy": true
+                },
+                "emptyLabelText": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "labelColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "fontSize": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "fontFamily": {
+                    "type": {
+                        "formatting": {
+                            "fontFamily": true
+                        }
+                    }
+                },
+                "bold": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "italic": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "underline": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "milestones": {
+            "properties": {
+                "showLines": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "lineColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "lineOpacity": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "lineType": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "shapeType": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "persistSettings": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "keepMilestoneSettingsOnFilteringInEditMode": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "taskLabels": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "shouldWrapText": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "enableBackground": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fontSize": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "fontFamily": {
+                    "type": {
+                        "formatting": {
+                            "fontFamily": true
+                        }
+                    }
+                },
+                "bold": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "italic": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "underline": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "width": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "customizeExpandCollapse":{
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fillExpandCollapse": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "fontSizeExpandCollapse": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "fontFamilyExpandCollapse": {
+                    "type": {
+                        "formatting": {
+                            "fontFamily": true
+                        }
+                    }
+                },
+                "boldExpandCollapse": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "italicExpandCollapse": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "underlineExpandCollapse": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fillNestedLabel": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "fontSizeNestedLabel": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "fontFamilyNestedLabel": {
+                    "type": {
+                        "formatting": {
+                            "fontFamily": true
+                        }
+                    }
+                },
+                "boldNestedLabel": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "italicNestedLabel": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "underlineNestedLabel": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "customizeNestedLabel":{
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "taskCompletion": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "maxCompletion": {
+                    "type": {
+                        "numeric": true
+                    }
+                }
+            }
+        },
+        "tooltipConfig": {
+            "properties": {
+                "dateFormat": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showLegend": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "legendDisplayName": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showTask": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "taskDisplayName": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showStartDate": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "startDateDisplayName": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showEndDate": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "endDateDisplayName": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showDuration": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "durationDisplayName": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showCompletion": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "completionDisplayName": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showResource": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "resourceDisplayName": {
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "taskConfig": {
+            "properties": {
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "height": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "borderWidth": {
+                    "type": {
+                        "numeric": true
+                    }
+                }
+            }
+        },
+        "taskResource": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "matchLegendColors": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "fontSize": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "fontFamily": {
+                    "type": {
+                        "formatting": {
+                            "fontFamily": true
+                        }
+                    }
+                },
+                "bold": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "italic": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "underline": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "position": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "fullText": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "widthByTask": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "dateType": {
+            "properties": {
+                "type": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "showTodayLine": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "todayColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "axisColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "axisTextColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "axisFontSize": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "enableBackground": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "background": {
+            "properties": {
+                "generalBackgroundEnable": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "generalBackgroundColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "generalBackgroundOpacity": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "categoryLabelsBackgroundEnable": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "categoryLabelsBackgroundColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "categoryLabelsBackgroundOpacity": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "dateTypeBackgroundEnable": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "dateTypeBackgroundColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "dateTypeBackgroundOpacity": {
+                    "type": {
+                        "numeric": true
+                    }
+                }
+            }
+        }
+    },
+    "sorting": {
+        "default": {}
+    },
+    "tooltips": {
+        "supportedTypes": {
+            "default": true,
+            "canvas": true
+        },
+        "roles": [
+            "tooltips"
+        ]
+    },
+    "privileges": [],
+    "supportsHighlight": true,
+    "supportsKeyboardFocus": true,
+	"supportsMultiVisualSelection": true
+}

@@ -100,7 +100,9 @@ export class GanttColumns<T> {
     // Data Roles
     public Legend: T | null = null;
     public Task: T | null = null;
+    public TaskId: T | null = null;
     public Parent: T | null = null;
+    public ParentId: T | null = null;
     public StartDate: T | null = null;
     public EndDate: T | null = null;
     public Duration: T | null = null;

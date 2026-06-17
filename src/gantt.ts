@@ -939,9 +939,6 @@ export class Gantt implements IVisual {
 
         const cachedShapes: { [key: string]: MilestoneShape } = {};
         const cachedColors: { [key: string]: string } = {};
-        const allShapes = [MilestoneShape.Circle, MilestoneShape.Square, MilestoneShape.Rhombus];
-
-        let prevShapeIndex = -1;
         if (milestonesCategory && milestonesCategory.values) {
             milestonesCategory.values.forEach((value: PrimitiveValue, index: number) => milestones.push({ value, index }));
             milestones.forEach((milestone) => {
@@ -973,8 +970,7 @@ export class Gantt implements IVisual {
                     const savedShape = (milestoneObjects?.milestones?.shapeType
                         ?? persistedMilestoneObjects?.milestones?.shapeType
                         ?? legacyMilestoneObjects?.milestones?.shapeType) as (MilestoneShape | undefined);
-                    cachedShapes[value] = savedShape ?? allShapes[(prevShapeIndex + 1) % allShapes.length];
-                    prevShapeIndex++
+                    cachedShapes[value] = savedShape ?? MilestoneShape.Rhombus;
                 }
                 if (!cachedColors[value]) {
                     const savedColor = (milestoneObjects?.milestones as any)?.fill?.solid?.color
@@ -1077,14 +1073,16 @@ export class Gantt implements IVisual {
 
             const {
                 taskParentName,
+                taskParentId,
                 extraInformation,
                 task
             } = this.createTask(taskCreationDetails);
 
-            if (taskParentName) {
+            if (taskParentId) {
                 Gantt.addTaskToParentTask(
                     task,
                     tasks,
+                    taskParentId,
                     taskParentName,
                     collapsedTasks,
                     extraInformation,
@@ -1098,6 +1096,7 @@ export class Gantt implements IVisual {
         Gantt.downgradeDurationUnitIfNeeded(tasks, durationUnit);
 
         tasks = Gantt.mergeSyntheticAndExplicitHierarchyTasks(tasks);
+        tasks = Gantt.removeRedundantSyntheticRoots(tasks);
         tasks = Gantt.sortHierarchicalTasks(tasks, sortingOptions);
 
         this.updateTaskDetails(tasks, durationUnit, duration, dataView, collapsedTasks);
@@ -1211,6 +1210,12 @@ export class Gantt implements IVisual {
 
         const resource: string = String(values?.Resource?.[index] ?? "");
         const taskParentName: string | null = values?.Parent?.[index] != null ? String(values.Parent[index]) : null;
+        const rawTaskId = values?.TaskId?.[index];
+        const taskId: string = rawTaskId != null ? String(rawTaskId) : String(categoryValue ?? "");
+        const rawParentId = values?.ParentId?.[index];
+        const taskParentId: string | null = rawParentId != null
+            ? String(rawParentId)
+            : taskParentName;
         const milestoneType: string | null = (values.Milestones && !lodashIsEmpty(values.Milestones[index]) && values.Milestones[index]) || null;
 
         const startDate: Date = (values.StartDate && values.StartDate[index]
@@ -1232,10 +1237,12 @@ export class Gantt implements IVisual {
             completion,
             resource,
             index: null as unknown as number,
+            id: taskId,
             name: taskName,
             start: startDate,
             end: endDate,
-            parent: taskParentName,
+            parent: taskParentId,
+            parentId: taskParentId,
             children: null,
             visibility: true,
             duration,
@@ -1257,7 +1264,7 @@ export class Gantt implements IVisual {
             highlight: highlight !== null
         };
 
-        return { taskParentName, extraInformation, task };
+        return { taskParentName, taskParentId, extraInformation, task };
     }
 
     private computeTaskGroupAttributes(
@@ -1361,10 +1368,10 @@ export class Gantt implements IVisual {
             stepDurationTransformation,
             endDate
         };
+
     }
 
     /**
-     * Wire a leaf task into the synthetic parent object that represents its
      * parent group.
      *
      * In this visual a parent is only the string value of a child's `Parent`
@@ -1386,18 +1393,25 @@ export class Gantt implements IVisual {
     private static addTaskToParentTask(
         task: Task,
         tasks: Task[],
-        taskParentName: string,
+        taskParentId: string,
+        taskParentName: string | null,
         collapsedTasks: string[],
         extraInformation: ExtraInformation[],
         selectionBuilder: ISelectionIdBuilder,
     ) {
-        let parentTask = tasks.find(x => x.name === taskParentName);
+        const normalizedParentKey = Gantt.normalizeHierarchyName(taskParentId);
+        let parentTask = tasks.find((x) => {
+            const candidateId = x.id ?? x.name;
+            return Gantt.normalizeHierarchyName(candidateId) === normalizedParentKey;
+        });
 
         if (!parentTask) {
+            const parentLabel = taskParentName ?? taskParentId;
             parentTask = Gantt.createParentTask(
-                taskParentName,
+                taskParentId,
+                parentLabel,
                 task,
-                collapsedTasks.includes(taskParentName) ? extraInformation : null,
+                collapsedTasks.includes(taskParentId) || collapsedTasks.includes(parentLabel) ? extraInformation : null,
                 selectionBuilder,
             );
             tasks.push(parentTask);
@@ -1412,11 +1426,41 @@ export class Gantt implements IVisual {
     }
 
     private static isSyntheticParentTask(task: Task): boolean {
-        return !!task.children?.length &&
-            task.start == null &&
-            task.end == null &&
-            task.duration == null &&
-            task.taskType == null;
+        if (!task.children?.length) {
+            return false;
+        }
+
+        const hasOwnSchedule = task.start != null || task.end != null || task.duration != null;
+        const hasOwnResourceData = task.resource != null || task.completion != null;
+        const hasOwnMilestones = !!task.Milestones?.length;
+
+        return !hasOwnSchedule && !hasOwnResourceData && !hasOwnMilestones;
+    }
+
+    private static normalizeHierarchyName(value: string | null | undefined): string {
+        return String(value ?? "")
+            .normalize("NFKC")
+            .replace(/[\u200B-\u200D\uFEFF]/g, "")
+            .trim()
+            .replace(/\s+/g, " ")
+            .toLowerCase();
+    }
+
+    private static removeRedundantSyntheticRoots(tasks: Task[]): Task[] {
+        const explicitNonRootNames = new Set<string>(
+            tasks
+                .filter((task: Task) => !Gantt.isSyntheticParentTask(task) && !!task.parent)
+                .map((task: Task) => Gantt.normalizeHierarchyName(task.id ?? task.name))
+        );
+
+        return tasks.filter((task: Task) => {
+            if (!Gantt.isSyntheticParentTask(task) || !!task.parent) {
+                return true;
+            }
+
+            const taskKey = Gantt.normalizeHierarchyName(task.id ?? task.name);
+            return !explicitNonRootNames.has(taskKey);
+        });
     }
 
     private static mergeSyntheticAndExplicitHierarchyTasks(tasks: Task[]): Task[] {
@@ -1424,7 +1468,7 @@ export class Gantt implements IVisual {
 
         tasks.forEach((task: Task) => {
             if (!Gantt.isSyntheticParentTask(task)) {
-                explicitTasksByName.set(task.name, task);
+                explicitTasksByName.set(Gantt.normalizeHierarchyName(task.id ?? task.name), task);
             }
         });
 
@@ -1433,7 +1477,7 @@ export class Gantt implements IVisual {
                 return;
             }
 
-            const explicitTask = explicitTasksByName.get(task.name);
+            const explicitTask = explicitTasksByName.get(Gantt.normalizeHierarchyName(task.id ?? task.name));
             if (!explicitTask || explicitTask === task) {
                 return;
             }
@@ -1452,7 +1496,7 @@ export class Gantt implements IVisual {
                 return true;
             }
 
-            return !explicitTasksByName.has(task.name);
+            return !explicitTasksByName.has(Gantt.normalizeHierarchyName(task.id ?? task.name));
         });
     }
 
@@ -1475,6 +1519,7 @@ export class Gantt implements IVisual {
      * `index: 0` is a placeholder — reassigned by `getGroupTasks`.
      */
     private static createParentTask(
+        id: string,
         name: string,
         firstChild: Task,
         extraInformation: ExtraInformation[] | null,
@@ -1482,6 +1527,7 @@ export class Gantt implements IVisual {
     ): Task {
         return {
             index: 0,
+            id,
             name,
             start: null,
             duration: null,
@@ -1489,6 +1535,7 @@ export class Gantt implements IVisual {
             resource: null,
             end: null,
             parent: null,
+            parentId: null,
             children: [firstChild],
             visibility: true,
             taskType: null,
@@ -1582,7 +1629,6 @@ export class Gantt implements IVisual {
     public static sortHierarchicalTasks(tasks: Task[], sortingOptions: SortingOptions): Task[] {
         // TODO: Consider using host.locale and sensitivity: "base" here to match
         // the Intl.Collator in getGroupTasks. Currently uses browser default locale
-        // and case-sensitive comparison, which may produce different order for
         // locale-specific characters (e.g. Turkish i/I, German ß/ss).
         const sortingFunction = ((a: Task, b: Task) => {
             const sortingDirection = sortingOptions.sortingDirection === SortDirection.Ascending ? 1 : -1;
@@ -1603,7 +1649,8 @@ export class Gantt implements IVisual {
         const assignHierarchy = (task: Task, parentPath: string | null, level: number) => {
             task.index = index++;
             task.parentPath = parentPath;
-            task.path = parentPath ? `${parentPath}.${task.name}` : task.name;
+            const pathToken = task.id || task.name;
+            task.path = parentPath ? `${parentPath}.${pathToken}` : pathToken;
             task.level = level;
             resultTasks.push(task);
 
@@ -1818,7 +1865,7 @@ export class Gantt implements IVisual {
 
         const isDurationFilled: boolean = dataView.metadata.columns.findIndex(col => Gantt.hasRole(col, GanttRole.Duration)) !== -1,
             isEndDateFilled: boolean = dataView.metadata.columns.findIndex(col => Gantt.hasRole(col, GanttRole.EndDate)) !== -1,
-            isParentFilled: boolean = dataView.metadata.columns.findIndex(col => Gantt.hasRole(col, GanttRole.Parent)) !== -1,
+            isParentFilled: boolean = dataView.metadata.columns.findIndex(col => Gantt.hasRole(col, GanttRole.Parent) || Gantt.hasRole(col, GanttRole.ParentId)) !== -1,
             isResourcesFilled: boolean = dataView.metadata.columns.findIndex(col => Gantt.hasRole(col, GanttRole.Resource)) !== -1;
 
         const legendData: LegendData = this.createLegend(legendTypes, !isDurationFilled && !isEndDateFilled);

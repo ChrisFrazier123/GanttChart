@@ -1,33 +1,33 @@
-Task,Parent,StartDate,Duration,Completion,Resource,Legend,Milestone,TooltipOwner,TooltipStatus
-Program Alpha,,2026-01-06,180,0.42,PMO,Program,,Alex Patel,In Progress
-Platform Track,Program Alpha,2026-01-06,120,0.55,Platform Team,Track,,Sam Nguyen,In Progress
-Data Track,Program Alpha,2026-01-20,140,0.35,Data Team,Track,,Priya Shah,In Progress
-Experience Track,Program Alpha,2026-02-03,120,0.28,UX Team,Track,,Nora Kim,In Progress
-Core Services,Platform Track,2026-01-06,80,0.60,Backend Team,Epic,,Marta Rossi,In Progress
-Observability,Platform Track,2026-01-15,70,0.48,SRE Team,Epic,,Lee Wong,In Progress
-Identity,Platform Track,2026-01-22,65,0.38,Security Team,Epic,,Ibrahim Ali,In Progress
-Ingestion,Data Track,2026-01-20,90,0.40,Data Eng,Epic,,Rahul Mehta,In Progress
-Modeling,Data Track,2026-02-01,85,0.30,Analytics Team,Epic,,Elena Petrova,In Progress
-Reporting,Data Track,2026-02-12,70,0.22,BI Team,Epic,,David Brown,In Progress
-Design System,Experience Track,2026-02-03,60,0.46,Design Team,Epic,,Mina Park,In Progress
-Portal Revamp,Experience Track,2026-02-10,75,0.20,Frontend Team,Epic,,Jon Carter,In Progress
-Testing,Core Services,2026-01-28,18,0.50,QA Team,Task,,Ava White,In Progress
-Build,Core Services,2026-01-12,22,0.75,Backend Team,Task,,Marta Rossi,In Progress
-Deploy,Core Services,2026-02-04,12,0.30,DevOps Team,Task,,Carlos Diaz,In Progress
-Build,Observability,2026-01-20,18,0.62,SRE Team,Task,,Lee Wong,In Progress
-Deploy,Observability,2026-02-07,10,0.25,DevOps Team,Task,,Carlos Diaz,At Risk
-Testing,Identity,2026-02-02,16,0.45,QA Team,Task,,Ava White,In Progress
-Build,Ingestion,2026-01-24,24,0.58,Data Eng,Task,,Rahul Mehta,In Progress
-Testing,Ingestion,2026-02-18,14,0.15,QA Team,Task,,Ava White,At Risk
-Build,Modeling,2026-02-05,20,0.40,Analytics Team,Task,,Elena Petrova,In Progress
-Deploy,Modeling,2026-03-02,9,0.10,DevOps Team,Task,,Carlos Diaz,Not Started
-Build,Reporting,2026-02-18,16,0.18,BI Team,Task,,David Brown,In Progress
-Testing,Design System,2026-02-14,12,0.35,QA Team,Task,,Ava White,In Progress
-Build,Portal Revamp,2026-02-16,26,0.12,Frontend Team,Task,,Jon Carter,In Progress
-Deploy,Portal Revamp,2026-03-20,8,0.00,DevOps Team,Task,Go-Live,Carlos Diaz,Not Started
-Program Beta,,2026-03-01,150,0.10,PMO,Program,,Sofia Martinez,In Progress
-Commerce Track,Program Beta,2026-03-01,90,0.15,Commerce Team,Track,,Ivy Chen,In Progress
-Checkout,Commerce Track,2026-03-06,60,0.12,Payments Team,Epic,,Victor Hugo,In Progress
-Build,Checkout,2026-03-10,20,0.08,Payments Team,Task,,Victor Hugo,In Progress
-Testing,Checkout,2026-04-01,12,0.00,QA Team,Task,,Ava White,Not Started
-Deploy,Checkout,2026-04-20,7,0.00,DevOps Team,Task,Release,Carlos Diaz,Not Started
+Task,Parent,TaskId,ParentTaskId,StartDate,Duration,Completion,Resource,Legend,Milestone,TooltipOwner,TooltipStatus
+Program Alpha,,1,,2026-01-06,180,0.42,PMO,Program,,Alex Patel,In Progress
+Platform Track,Program Alpha,2,1,2026-01-06,120,0.55,Platform Team,Track,,Sam Nguyen,In Progress
+Data Track,Program Alpha,3,1,2026-01-20,140,0.35,Data Team,Track,,Priya Shah,In Progress
+Experience Track,Program Alpha,4,1,2026-02-03,120,0.28,UX Team,Track,,Nora Kim,In Progress
+Core Services,Platform Track,5,2,2026-01-06,80,0.60,Backend Team,Epic,,Marta Rossi,In Progress
+Observability,Platform Track,6,2,2026-01-15,70,0.48,SRE Team,Epic,,Lee Wong,In Progress
+Identity,Platform Track,7,2,2026-01-22,65,0.38,Security Team,Epic,,Ibrahim Ali,In Progress
+Ingestion,Data Track,8,3,2026-01-20,90,0.40,Data Eng,Epic,,Rahul Mehta,In Progress
+Modeling,Data Track,9,3,2026-02-01,85,0.30,Analytics Team,Epic,,Elena Petrova,In Progress
+Reporting,Data Track,10,3,2026-02-12,70,0.22,BI Team,Epic,,David Brown,In Progress
+Design System,Experience Track,11,4,2026-02-03,60,0.46,Design Team,Epic,,Mina Park,In Progress
+Portal Revamp,Experience Track,12,4,2026-02-10,75,0.20,Frontend Team,Epic,,Jon Carter,In Progress
+Testing,Core Services,13,5,2026-01-28,18,0.50,QA Team,Task,,Ava White,In Progress
+Build,Core Services,14,5,2026-01-12,22,0.75,Backend Team,Task,,Marta Rossi,In Progress
+Deploy,Core Services,15,5,2026-02-04,12,0.30,DevOps Team,Task,,Carlos Diaz,In Progress
+Build,Observability,16,6,2026-01-20,18,0.62,SRE Team,Task,,Lee Wong,In Progress
+Deploy,Observability,17,6,2026-02-07,10,0.25,DevOps Team,Task,,Carlos Diaz,At Risk
+Testing,Identity,18,7,2026-02-02,16,0.45,QA Team,Task,,Ava White,In Progress
+Build,Ingestion,19,8,2026-01-24,24,0.58,Data Eng,Task,,Rahul Mehta,In Progress
+Testing,Ingestion,20,8,2026-02-18,14,0.15,QA Team,Task,,Ava White,At Risk
+Build,Modeling,21,9,2026-02-05,20,0.40,Analytics Team,Task,,Elena Petrova,In Progress
+Deploy,Modeling,22,9,2026-03-02,9,0.10,DevOps Team,Task,,Carlos Diaz,Not Started
+Build,Reporting,23,10,2026-02-18,16,0.18,BI Team,Task,,David Brown,In Progress
+Testing,Design System,24,11,2026-02-14,12,0.35,QA Team,Task,,Ava White,In Progress
+Build,Portal Revamp,25,12,2026-02-16,26,0.12,Frontend Team,Task,,Jon Carter,In Progress
+Deploy,Portal Revamp,26,12,2026-03-20,8,0.00,DevOps Team,Task,Go-Live,Carlos Diaz,Not Started
+Program Beta,,27,,2026-03-01,150,0.10,PMO,Program,,Sofia Martinez,In Progress
+Commerce Track,Program Beta,28,27,2026-03-01,90,0.15,Commerce Team,Track,,Ivy Chen,In Progress
+Checkout,Commerce Track,29,28,2026-03-06,60,0.12,Payments Team,Epic,,Victor Hugo,In Progress
+Build,Checkout,30,29,2026-03-10,20,0.08,Payments Team,Task,,Victor Hugo,In Progress
+Testing,Checkout,31,29,2026-04-01,12,0.00,QA Team,Task,,Ava White,Not Started
+Deploy,Checkout,32,29,2026-04-20,7,0.00,DevOps Team,Task,Release,Carlos Diaz,Not Started

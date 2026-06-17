@@ -63,6 +63,7 @@ export interface ExtraInformation {
 
 export interface Task extends SelectableDataPoint {
     index: number;
+    id?: string;
     name: string;
     start: Date | null;
     duration: number | null;
@@ -70,6 +71,7 @@ export interface Task extends SelectableDataPoint {
     resource: string | null;
     end: Date | null;
     parent: string | null;
+    parentId?: string | null;
     parentPath?: string | null;
     path?: string;
     level?: number;

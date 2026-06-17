@@ -13,9 +13,19 @@
             "kind": "Grouping"
         },
         {
+            "name": "TaskId",
+            "displayName": "Task ID",
+            "kind": "Grouping"
+        },
+        {
             "name": "Parent",
             "displayName": "Parent",
             "displayNameKey": "Role_Parent",
+            "kind": "Grouping"
+        },
+        {
+            "name": "ParentId",
+            "displayName": "Parent ID",
             "kind": "Grouping"
         },
         {
@@ -89,7 +99,15 @@
                         "min": 1,
                         "max": 1
                     },
+                    "TaskId": {
+                        "min": 0,
+                        "max": 1
+                    },
                     "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "ParentId": {
                         "min": 0,
                         "max": 1
                     },
@@ -131,7 +149,15 @@
                         "min": 1,
                         "max": 1
                     },
+                    "TaskId": {
+                        "min": 0,
+                        "max": 1
+                    },
                     "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "ParentId": {
                         "min": 0,
                         "max": 1
                     },
@@ -173,7 +199,15 @@
                         "min": 0,
                         "max": 1
                     },
+                    "TaskId": {
+                        "min": 0,
+                        "max": 1
+                    },
                     "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "ParentId": {
                         "min": 0,
                         "max": 1
                     },
@@ -215,7 +249,15 @@
                         "min": 0,
                         "max": 1
                     },
+                    "TaskId": {
+                        "min": 0,
+                        "max": 1
+                    },
                     "Parent": {
+                        "min": 0,
+                        "max": 1
+                    },
+                    "ParentId": {
                         "min": 0,
                         "max": 1
                     },
@@ -259,7 +301,17 @@
                         },
                         {
                             "for": {
+                                "in": "TaskId"
+                            }
+                        },
+                        {
+                            "for": {
                                 "in": "Parent"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "ParentId"
                             }
                         },
                         {

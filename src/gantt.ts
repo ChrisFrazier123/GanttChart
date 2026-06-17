@@ -853,8 +853,9 @@ export class Gantt implements IVisual {
             labelColor: legendSettings.labelColor.value.value
         };
 
-        legendData.dataPoints = legendTypes?.types.map(
-            (typeMeta: LegendGroup): LegendDataPoint => {
+        legendData.dataPoints = (legendTypes?.types || [])
+            .filter((typeMeta: LegendGroup) => isStringNotNullEmptyOrUndefined(typeMeta.legendName))
+            .map((typeMeta: LegendGroup): LegendDataPoint => {
                 let color: string = this.formattingSettings.taskConfig.fill.value.value;
 
                 if (!useDefaultColor && !colorHelper.isHighContrast) {
@@ -1991,8 +1992,9 @@ export class Gantt implements IVisual {
         }
     }
 
-    private scaleAxisLength(axisLength: number): number {
-        const fullScreenAxisLength: number = Gantt.DefaultGraphicWidthPercentage * this.viewport.width;
+    private scaleAxisLength(axisLength: number, availableWidth?: number): number {
+        const layoutWidth = availableWidth ?? this.viewport.width;
+        const fullScreenAxisLength: number = Gantt.DefaultGraphicWidthPercentage * layoutWidth;
         if (axisLength < fullScreenAxisLength) {
             axisLength = fullScreenAxisLength;
         }
@@ -2100,6 +2102,12 @@ export class Gantt implements IVisual {
 
     private render(objects: powerbi.DataViewObjects): void {
         const settings = this.formattingSettings;
+        const taskLabelsWidth = settings.taskLabels.taskLabelsGroup.general.width.value;
+        const resourceWidthForLayout = this.getResourceWidthForLayout(settings);
+        const maxAxisLength = Math.max(
+            0,
+            this.viewport.width - this.margin.left - taskLabelsWidth - resourceWidthForLayout
+        );
 
         this.renderLegend();
         this.updateChartSize();
@@ -2143,7 +2151,7 @@ export class Gantt implements IVisual {
             ticks = ticks < 2 ? 2 : ticks;
 
             axisLength = ticks * Gantt.DefaultTicksLength;
-            axisLength = this.scaleAxisLength(axisLength);
+            axisLength = this.scaleAxisLength(axisLength, maxAxisLength);
 
             const viewportIn: IViewport = {
                 height: this.viewport.height,
@@ -2157,15 +2165,7 @@ export class Gantt implements IVisual {
             this.renderAxis(xAxisProperties);
         }
 
-        axisLength = this.scaleAxisLength(axisLength);
-
-        const taskLabelsWidth = settings.taskLabels.taskLabelsGroup.general.width.value;
-        const resourceWidthForLayout = this.getResourceWidthForLayout(settings);
-        const maxAxisLength = Math.max(
-            0,
-            this.viewport.width - this.margin.left - taskLabelsWidth - resourceWidthForLayout
-        );
-        axisLength = Math.min(axisLength, maxAxisLength);
+        axisLength = this.scaleAxisLength(axisLength, maxAxisLength);
 
         this.setDimension(groupedTasks, axisLength, settings);
 

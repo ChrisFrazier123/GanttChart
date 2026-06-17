@@ -2000,6 +2000,14 @@ export class Gantt implements IVisual {
         return axisLength;
     }
 
+    private getResourceWidthForLayout(settings: GanttChartSettingsModel): number {
+        if (settings.taskResource.show.value && settings.taskResource.position.value.value === ResourceLabelPosition.Right) {
+            return Gantt.DefaultValues.ResourceWidth;
+        }
+
+        return Gantt.DefaultValues.ResourceWidth / 2;
+    }
+
     /**
     * Called on data change or resizing
     * @param options The visual option that contains the dataView and the viewport
@@ -2150,6 +2158,14 @@ export class Gantt implements IVisual {
         }
 
         axisLength = this.scaleAxisLength(axisLength);
+
+        const taskLabelsWidth = settings.taskLabels.taskLabelsGroup.general.width.value;
+        const resourceWidthForLayout = this.getResourceWidthForLayout(settings);
+        const maxAxisLength = Math.max(
+            0,
+            this.viewport.width - this.margin.left - taskLabelsWidth - resourceWidthForLayout
+        );
+        axisLength = Math.min(axisLength, maxAxisLength);
 
         this.setDimension(groupedTasks, axisLength, settings);
 
@@ -2318,13 +2334,8 @@ export class Gantt implements IVisual {
         });
 
         const fullResourceLabelMargin = totalRows * this.getResourceLabelTopMargin();
-        let widthBeforeConversion = this.margin.left + settings.taskLabels.taskLabelsGroup.general.width.value + axisLength;
-
-        if (settings.taskResource.show.value && settings.taskResource.position.value.value === ResourceLabelPosition.Right) {
-            widthBeforeConversion += Gantt.DefaultValues.ResourceWidth;
-        } else {
-            widthBeforeConversion += Gantt.DefaultValues.ResourceWidth / 2;
-        }
+        const resourceWidthForLayout = this.getResourceWidthForLayout(settings);
+        const widthBeforeConversion = this.margin.left + settings.taskLabels.taskLabelsGroup.general.width.value + axisLength + resourceWidthForLayout;
 
         const height = PixelConverter.toString(totalRows * (settings.taskConfig.height.value || DefaultChartLineHeight) + this.margin.top + fullResourceLabelMargin);
         const width = PixelConverter.toString(widthBeforeConversion);
